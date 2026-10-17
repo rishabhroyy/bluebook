@@ -1,17 +1,20 @@
 """Part 2 tests: the TeachController state machine against a fake glasses socket. No network, no models."""
 
+import asyncio
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from bluebook_core import display, glasses, hub, store
 from bluebook_core.glasses import GlassesConnection
-from bluebook_core.protocol import Hello, Input, StepChanged
-from bluebook_teach import render
-from bluebook_teach.controller import TeachController
+from bluebook_core.protocol import CameraFrame, Hello, Input, StepChanged
+from bluebook_teach import render, tutor
+from bluebook_teach.controller import FAILED, LISTENING, THINKING, TeachController
+from bluebook_teach.tutor import LibraryPick, TutorReply
 from fastapi.testclient import TestClient
 
 FIXTURES = Path(__file__).resolve().parents[3] / "fixtures/skills"
@@ -154,6 +157,226 @@ async def test_list_index_out_of_range_is_ignored(make):
     ctrl, conn = make()
     await ctrl.on_connect(conn)
     assert await press(ctrl, conn, "list_select", index=7) == []
+
+
+# ------------------------------------------------------------------------------ voice
+
+PCM = b"\0" * 3200
+
+
+class Replies(list):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[dict] = []
+
+
+@pytest.fixture
+def replies(monkeypatch):
+    """Queue TutorReply/LibraryPick/Exception results for the faked model calls; records call args."""
+    queue = Replies()
+    calls = queue.calls
+
+    async def fake(*args, **kw):
+        calls.append({"args": args, **kw})
+        r = queue.pop(0)
+        if isinstance(r, asyncio.Event):  # block until the test releases it
+            await r.wait()
+            r = queue.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    async def ask(pkg, step_id, history, extra, pcm, frame=None):
+        return await fake(step_id=step_id, history=history, frame=frame)
+
+    async def pick(skills, pcm):
+        return await fake(skills=[k.id for k in skills])
+
+    monkeypatch.setattr(tutor, "ask", ask)
+    monkeypatch.setattr(tutor, "pick_skill", pick)
+    return queue
+
+
+async def settle(ctrl):
+    while ctrl._tasks:
+        await asyncio.gather(*ctrl._tasks, return_exceptions=True)
+
+
+async def say(ctrl, conn, settle_after=True):
+    await press(ctrl, conn, "long_press")
+    await ctrl.on_utterance(conn, PCM)
+    await press(ctrl, conn, "long_press_release")
+    if settle_after:
+        await settle(ctrl)
+
+
+async def test_question_answer_pages_then_back_to_step(make, replies):
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    replies.append(TutorReply(transcript="which way is closed?", pages=["Clockwise. " + "turn " * 30, "Done."]))
+    await press(ctrl, conn, "long_press")
+    assert status(conn) == f"1/5 | {LISTENING}"
+    await ctrl.on_utterance(conn, PCM)
+    assert status(conn) == f"1/5 | {THINKING}"
+    await settle(ctrl)
+
+    answer = conn.state["answer"]
+    assert len(answer) == 3 and all(len(p) <= render.TIP_CHARS for p in answer)  # long page re-paginated
+    assert tip(conn) == answer[0] and '"which way is closed?"' in status(conn)
+    assert replies.calls[0]["step_id"] == "s1"
+    for _ in range(3):
+        await press(ctrl, conn, "scroll_down")
+    assert tip(conn) == "Turn the shutoff valve clockwise until it stops."  # scrolled off the end: dismissed
+    assert conn.state["history"][-1]["q"] == "which way is closed?"
+
+
+@pytest.mark.parametrize(
+    ("reply", "start", "want_screen", "want_step"),
+    [
+        (TutorReply(action="next", pages=["Next."]), 0, "step", 1),
+        (TutorReply(action="prev", pages=["Back."]), 2, "step", 1),
+        (TutorReply(action="prev"), 0, "step", 0),
+        (TutorReply(action="goto", goto_step="s4"), 0, "step", 3),
+        (TutorReply(action="goto", goto_step="s99", pages=["?"]), 1, "step", 1),  # unknown id ignored
+        (TutorReply(action="next"), 4, "done", 4),
+    ],
+)
+async def test_tutor_actions(make, replies, reply, start, want_screen, want_step):
+    ctrl, conn = make()
+    await to_step(ctrl, conn, start)
+    replies.append(reply)
+    await say(ctrl, conn)
+    assert conn.state["screen"] == want_screen and conn.state["step"] == want_step
+    if want_screen == "step":
+        assert hub.last(StepChanged, conn.session).step_id == f"s{want_step + 1}"
+        assert tip(conn) == (render.answer_pages(reply.pages) or [tip(conn)])[0]
+
+
+async def test_add_substeps_extends_the_step(make, replies):
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    replies.append(
+        TutorReply(action="add_substeps", substeps=["Find the cold valve, on the right.", "Grip the oval handle."])
+    )
+    await say(ctrl, conn)
+    assert tip(conn) == "Substep 1/2. Find the cold valve, on the right."
+    assert conn.state["extra_substeps"] == {"s1": ["Find the cold valve, on the right.", "Grip the oval handle."]}
+    pages = render.detail_pages(store.load(SKILL, FIXTURES), store.load(SKILL, FIXTURES).steps[0], ["x"])
+    assert any(p.startswith("Substep 1/1. x") for p in pages)
+
+
+async def test_question_on_overview(make, replies):
+    ctrl, conn = make()
+    await ctrl.on_connect(conn)
+    await press(ctrl, conn, "list_select")
+    replies.append(TutorReply(pages=["You need an adjustable wrench."]))
+    await say(ctrl, conn)
+    msg = next(m for m in reversed(conn.ws.sent) if m["type"] == "text")
+    assert msg["name"] == "msg" and msg["content"].startswith("You need an adjustable wrench.")
+    assert replies.calls[0]["step_id"] is None
+    replies.append(TutorReply(action="next", pages=["Let's go."]))
+    await say(ctrl, conn)
+    assert conn.state["screen"] == "step" and conn.state["step"] == 0 and tip(conn) == "Let's go."
+
+
+async def test_answer_for_an_old_step_is_dropped(make, replies):
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    gate = asyncio.Event()
+    replies.extend([gate, TutorReply(action="next", pages=["stale"])])
+    await say(ctrl, conn, settle_after=False)
+    await press(ctrl, conn, "tap")  # learner moves on while the model is thinking
+    gate.set()
+    await settle(ctrl)
+    assert conn.state["step"] == 1 and conn.state["answer"] == [] and "stale" not in tip(conn)
+
+
+async def test_newer_question_wins(make, replies):
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    gate = asyncio.Event()
+    replies.extend([gate, TutorReply(pages=["first"])])
+    await say(ctrl, conn, settle_after=False)
+    await asyncio.sleep(0)  # first call starts and blocks on the gate
+    replies.insert(0, TutorReply(pages=["second"]))  # served to the second call while the first waits
+    await say(ctrl, conn, settle_after=False)
+    await asyncio.sleep(0)
+    gate.set()
+    await settle(ctrl)
+    assert tip(conn) == "second"
+
+
+async def test_model_failure_shows_retry_and_lesson_continues(make, replies):
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    replies.append(TimeoutError())
+    await say(ctrl, conn)
+    assert status(conn) == f"1/5 | {FAILED}"
+    await press(ctrl, conn, "tap")
+    assert tip(conn) == "Open the faucet to drain remaining pressure." and FAILED not in status(conn)
+
+
+async def test_release_without_audio_clears_listening(make):
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    await press(ctrl, conn, "long_press")
+    await press(ctrl, conn, "long_press_release")  # too short: core never calls on_utterance
+    assert status(conn).startswith("1/5 | Turn off the water")
+
+
+async def test_pushed_controller_owns_the_screen(make, replies):
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    gate = asyncio.Event()
+    replies.extend([gate, TutorReply(pages=["late"])])
+    await say(ctrl, conn, settle_after=False)
+    await conn.push(glasses.Controller())  # e.g. Part 3 calibration takes over
+    n = len(conn.ws.sent)
+    gate.set()
+    await settle(ctrl)
+    assert len(conn.ws.sent) == n
+
+
+async def test_library_voice_pick(make, replies):
+    ctrl, conn = make()
+    await ctrl.on_connect(conn)
+    replies.append(LibraryPick(transcript="fix my leaking sink", skill_id=SKILL))
+    await say(ctrl, conn)
+    assert conn.state["screen"] == "overview" and replies.calls[0]["skills"] == [SKILL]
+
+    await press(ctrl, conn, "double_tap")
+    replies.append(LibraryPick(transcript="rewire a panel", skill_id="made-up", reply="No skill for that yet."))
+    await say(ctrl, conn)
+    assert conn.state["screen"] == "library"
+    assert conn.ws.sent[-1] == {"type": "text", "id": 1, "name": "title", "content": "No skill for that yet."}
+
+
+async def test_tutor_sees_only_a_fresh_scene_frame(make, replies):
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    hub.publish(CameraFrame(session="scene", t=time.time() - 30, jpeg=b"old", width=4, height=3))
+    replies.append(TutorReply(pages=["a"]))
+    await say(ctrl, conn)
+    hub.publish(CameraFrame(session="scene", t=time.time(), jpeg=b"new", width=4, height=3))
+    replies.append(TutorReply(pages=["b"]))
+    await say(ctrl, conn)
+    assert [c["frame"] for c in replies.calls] == [None, b"new"]
+
+
+async def test_history_is_capped(make, replies):
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    for i in range(12):
+        replies.append(TutorReply(transcript=f"q{i}", pages=["ok"]))
+        await say(ctrl, conn)
+    assert [h["q"] for h in conn.state["history"]] == [f"q{i}" for i in range(2, 12)]
+
+
+def test_skill_context_drops_what_the_tutor_cant_use():
+    ctx = json.loads(tutor.skill_context(store.load(SKILL, FIXTURES)))
+    assert {"transcript", "chunks", "source"}.isdisjoint(ctx)
+    assert ctx["steps"][0]["narration"] and "t_start" not in ctx["steps"][0]
+    assert ctx["steps"][1]["provenance"] == "inferred"  # the tutor must see provenance to hedge
 
 
 # ------------------------------------------------------------------------ persistence

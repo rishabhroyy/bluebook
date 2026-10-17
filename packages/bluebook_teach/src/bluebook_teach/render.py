@@ -107,16 +107,13 @@ def answer_pages(pages: list[str]) -> list[str]:
 
 
 def status_line(pkg: SkillPackage, i: int, view: int, n_pages: int, note: str = "") -> str:
-    """'2/5 | Turn off water | 1/4' or, with a note, '2/5 | ● listening'."""
+    """'2/5 | Turn off water | pg 1/4', or with a note '2/5 | ● listening'. The middle part is cut to fit."""
     step = pkg.steps[i]
-    parts = [f"{i + 1}/{len(pkg.steps)}"]
-    if note:
-        parts.append(note)
-    else:
-        parts.append(step.title + (" (optional)" if step.optional else ""))
-        if n_pages > 1:
-            parts.append(f"{view + 1}/{n_pages}")
-    return sanitize(" | ".join(parts))[:STATUS_CHARS]
+    head = f"{i + 1}/{len(pkg.steps)}"
+    tail = f"pg {view + 1}/{n_pages}" if n_pages > 1 else ""
+    mid = sanitize(note or step.title + (" (optional)" if step.optional else ""))
+    room = STATUS_CHARS - len(head) - 3 - (len(tail) + 3 if tail else 0)
+    return " | ".join(p for p in (head, mid[: max(room, 0)], tail) if p)
 
 
 def overview_text(pkg: SkillPackage) -> str:

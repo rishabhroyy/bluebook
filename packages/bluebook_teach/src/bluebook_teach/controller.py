@@ -12,20 +12,27 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import Coroutine
 from pathlib import Path
 
 from bluebook_core import display, glasses, hub, store
 from bluebook_core.config import config
 from bluebook_core.glasses import Controller, GlassesConnection
-from bluebook_core.protocol import Input, StepChanged, StepTarget
+from bluebook_core.protocol import CameraFrame, Input, StepChanged, StepTarget
 from bluebook_core.skill import SkillPackage, Step
 
-from . import render
+from . import render, tutor
 
 log = logging.getLogger("bluebook.teach")
 
 SCREENS = ("library", "overview", "step", "done")
+SCENE_CAMERA = "scene"  # apps/camera ?id=scene
+FRESH_S = 2.0  # a scene frame older than this is not shown to a model
+
+LISTENING = "● listening"
+THINKING = "thinking..."
+FAILED = "could not answer, hold to retry"
 
 
 def fresh_state() -> dict:
@@ -68,6 +75,9 @@ class TeachController(Controller):
         self.skills_root = skills_root  # None = config.skills_dir (store's default)
         self.sessions_dir = sessions_dir or config.data_dir / "sessions"
         self.epoch = 0  # bumped on every navigation; async results from an older epoch are dropped
+        self.question = 0  # bumped per utterance; an older question's answer is dropped
+        self.note = ""  # transient status (listening / thinking / error), shown instead of the step title
+        self.heard = ""  # last transcript, shown in the status line while its answer is up
         self._tasks: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------ lifecycle
@@ -90,7 +100,15 @@ class TeachController(Controller):
 
     async def on_input(self, conn: GlassesConnection, ev: Input) -> None:
         try:
-            await getattr(self, f"_input_{conn.state['screen']}")(conn, ev)
+            if ev.kind == "long_press":  # push-to-talk: the client is already streaming PCM
+                self.note = LISTENING
+                await self._update(conn)
+            elif ev.kind == "long_press_release":
+                if self.note == LISTENING:  # no utterance arrived (too short / no audio); AudioEnd comes first
+                    self.note = ""
+                    await self._update(conn)
+            else:
+                await getattr(self, f"_input_{conn.state['screen']}")(conn, ev)
         except (OSError, ValueError, IndexError) as e:  # skill changed on disk mid-lesson: redraw (falls back)
             log.warning("session %s: %s; redrawing", conn.session, e)
             await self._render(conn)
@@ -128,6 +146,89 @@ class TeachController(Controller):
         elif ev.kind == "double_tap":
             await self._go(conn, "step", step=len(self._pkg(conn).steps) - 1)
 
+    # ---------------------------------------------------------------------- voice
+
+    async def on_utterance(self, conn: GlassesConnection, pcm: bytes) -> None:
+        """Runs on the receive loop: flip the status and hand the model call to a task."""
+        self.note = THINKING if conn.state["screen"] != "done" else ""
+        self.question += 1
+        await self._update(conn)
+        if self.note:
+            self._spawn(self._answer(conn, pcm, self.epoch, self.question, time.monotonic()), name="answer")
+
+    async def _answer(self, conn: GlassesConnection, pcm: bytes, epoch: int, q: int, t0: float) -> None:
+        s = conn.state
+        try:
+            if s["screen"] == "library":
+                skills = [k for k in store.list_skills(self.skills_root) if k.id in s["library_ids"]]
+                pick = await tutor.pick_skill(skills, pcm)
+            else:
+                pkg = self._pkg(conn)
+                step = pkg.steps[s["step"]] if s["screen"] == "step" else None
+                extra = s["extra_substeps"].get(step.id, []) if step else []
+                reply = await tutor.ask(pkg, step and step.id, s["history"], extra, pcm, self._fresh_frame())
+        except Exception as e:  # noqa: BLE001 — timeout, model/network error, bad JSON: say so, keep the lesson
+            log.warning("session %s: answer failed: %r", conn.session, e)
+            if not self._stale(conn, epoch, q):
+                self.note = FAILED
+                await self._update(conn)
+            return
+        if self._stale(conn, epoch, q):
+            log.info("session %s: dropped a stale answer", conn.session)
+            return
+        self.note = ""
+        if s["screen"] == "library":
+            await self._apply_pick(conn, pick)
+        else:
+            await self._apply_reply(conn, pkg, reply)
+        log.info("session %s: answered in %.2fs", conn.session, time.monotonic() - t0)
+
+    async def _apply_pick(self, conn: GlassesConnection, pick: tutor.LibraryPick) -> None:
+        if pick.skill_id in conn.state["library_ids"]:
+            await self._go(conn, "overview", skill_id=pick.skill_id)
+        else:
+            self.note = render.sanitize(pick.reply or "No match. Hold to try again.")
+            await self._update(conn)
+
+    async def _apply_reply(self, conn: GlassesConnection, pkg: SkillPackage, reply: tutor.TutorReply) -> None:
+        s = conn.state
+        pages = render.answer_pages(reply.pages)
+        s["history"] = [*s["history"], {"q": reply.transcript, "a": " ".join(reply.pages)}][-10:]
+        here = s["step"] if s["screen"] == "step" else -1  # overview counts as "before step 1"
+        target = None
+        if reply.action == "next":
+            target = here + 1
+        elif reply.action == "prev" and here > 0:
+            target = here - 1
+        elif reply.action == "goto":
+            target = next((st.index for st in pkg.steps if st.id == reply.goto_step), None)  # unknown id: ignore
+        elif reply.action == "add_substeps" and here >= 0 and reply.substeps:
+            subs = [render.sanitize(x) for x in reply.substeps[:6]]
+            s["extra_substeps"][pkg.steps[here].id] = subs
+            pages = pages or render.answer_pages([f"Substep {i}/{len(subs)}. {x}" for i, x in enumerate(subs, 1)])
+        if target is not None and target != here:
+            if target >= len(pkg.steps):
+                await self._go(conn, "done")
+                return
+            await self._go(conn, "step", step=target)
+        self.heard = render.sanitize(reply.transcript)
+        s["answer"], s["view"] = pages, 0
+        await self._update(conn)
+
+    def _fresh_frame(self) -> bytes | None:
+        f = hub.last(CameraFrame, SCENE_CAMERA)
+        return f.jpeg if f and time.time() - f.t < FRESH_S else None
+
+    def _stale(self, conn: GlassesConnection, epoch: int, q: int | None = None) -> bool:
+        """The learner moved on, asked again, a pushed controller (P3 calibration) owns the screen,
+        or this socket was replaced by a reconnect."""
+        return (
+            epoch != self.epoch
+            or (q is not None and q != self.question)
+            or conn.controller is not self
+            or glasses.sessions.get(conn.session, conn) is not conn
+        )
+
     async def _scroll(self, conn: GlassesConnection, d: int) -> None:
         """Page through the answer (if one is showing), then back to the step's own pages."""
         s = conn.state
@@ -142,13 +243,18 @@ class TeachController(Controller):
 
     # ----------------------------------------------------------------- navigation
 
-    async def _go(self, conn: GlassesConnection, screen: str, skill_id: str | None = None, step: int = 0) -> None:
+    async def _go(
+        self, conn: GlassesConnection, screen: str, skill_id: str | None = None, step: int | None = None
+    ) -> None:
         s = conn.state
         cheap = screen == "step" and s["screen"] == "step" and conn.page is not None
-        s.update(screen=screen, step=step, view=0, answer=[])
+        s.update(screen=screen, view=0, answer=[])
         if skill_id is not None:
-            s["skill_id"] = skill_id
+            s.update(skill_id=skill_id, step=0)
+        if step is not None:
+            s["step"] = step
         self.epoch += 1
+        self.note = self.heard = ""
         if cheap:  # step -> step stays on teach_page: two text updates, no ~165 ms rebuild
             await self._refresh(conn)
         else:
@@ -161,7 +267,7 @@ class TeachController(Controller):
         s = conn.state
         try:
             if s["screen"] == "overview":
-                await conn.show(display.message_page(render.overview_text(self._pkg(conn))))
+                await conn.show(display.message_page(self._overview(conn)))
             elif s["screen"] == "step":
                 await conn.show(display.teach_page(self._tip(conn), self._status(conn)))
             elif s["screen"] == "done":
@@ -186,6 +292,25 @@ class TeachController(Controller):
         await conn.text("tip", self._tip(conn))
         await conn.text("status", self._status(conn))
 
+    async def _update(self, conn: GlassesConnection) -> None:
+        """In-place update of whatever screen is up, e.g. for the listening/thinking note or an answer."""
+        screen = conn.state["screen"]
+        if screen == "step":
+            await self._refresh(conn)
+        elif screen == "overview":
+            await conn.text("msg", self._overview(conn))
+        elif screen == "library" and conn.page and any(b.name == "title" for b in conn.page.boxes):
+            await conn.text("title", self.note or render.LIBRARY_TITLE)
+
+    def _overview(self, conn: GlassesConnection) -> str:
+        """Overview text, or the tutor's answer to a question asked on the overview."""
+        s = conn.state
+        if s["answer"]:
+            body = "\n\n".join(s["answer"]) + "\n\nTap to start. Double tap for the library."
+        else:
+            body = render.overview_text(self._pkg(conn))
+        return f"{self.note}\n\n{body}" if self.note else body
+
     # ---------------------------------------------------------------- step view
 
     def _pkg(self, conn: GlassesConnection) -> SkillPackage:
@@ -209,7 +334,10 @@ class TeachController(Controller):
 
     def _status(self, conn: GlassesConnection) -> str:
         s = conn.state
-        return render.status_line(self._pkg(conn), s["step"], s["view"], len(self._pages(conn)))
+        if self.note:  # listening / thinking / error: no page counter, it's not about the pages
+            return render.status_line(self._pkg(conn), s["step"], 0, 0, self.note)
+        heard = f'"{self.heard}"' if s["answer"] and self.heard else ""
+        return render.status_line(self._pkg(conn), s["step"], s["view"], len(self._pages(conn)), heard)
 
     # -------------------------------------------------------------- hub + disk
 
