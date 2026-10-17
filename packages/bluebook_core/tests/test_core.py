@@ -62,8 +62,10 @@ def test_compositor_sends_only_changed_tiles():
 
 
 def test_glasses_ws_echo():
+    from bluebook_core import glasses
     from bluebook_core.server import app
 
+    glasses.set_controller(glasses.EchoController)  # mounted parts (Part 2) replace the default at import
     with TestClient(app) as c, c.websocket_connect("/ws/glasses") as ws:
         ws.send_text(Hello(device={"sn": "test"}).model_dump_json())
         assert json.loads(ws.receive_text())["type"] == "page"
