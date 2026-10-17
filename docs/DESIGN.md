@@ -29,7 +29,7 @@ on 2026-10-17, unless marked *community*. Sources are in §13.
 
 | Fact | Consequence for bluebook |
 |---|---|
-| **The G2 has no camera and no speaker.** Input: 4-mic array (one 16 kHz s16le mono stream), touchpads on both temples, optional R1 ring, IMU. | Every "seeing" job uses an **external iPhone camera**. All output is visual. Part 3 can't track from the glasses' own view, so it has to track the glasses from outside. |
+| **The G2 has no camera and no speaker.** Input: 4-mic array (one 16 kHz s16le mono stream), touchpads on both temples, optional R1 ring, IMU. | Every "seeing" job uses an **external iPhone camera**. All output is visual. Part 3 can't track from the glasses' own view, so it tracks the **wearer's head** from outside, **marker-free** (no AprilTags or other fiducials). |
 | **The app runs in a WebView inside the Even Realities phone app.** The glasses only render containers and send input over BLE. Apps are HTML/TS built with Vite. | The "G2 app" is a web page on the phone. Heavy work happens on the laptop server. The phone needs Tailscale to reach it. |
 | **Display: 576×288, 4-bit greyscale (green), black is see-through.** No DOM: at most **4 image + 8 text/list containers**, absolute positions, exactly one input-capture container. Images go up to **288×144** per container. Text is up to 1000 chars on build and 2000 on update. One built-in proportional font with no size control. | We use **server-driven UI**: the server sends container layouts and the app only renders them (§5.2). Images can't cover the whole screen except as 4 tiles. Overlays live in fixed image "bands". |
 | **Update costs (community, measured):** text update ~83 ms, page rebuild ~165 ms (may flicker), image ~104 ms + 3.9 ms/KB, ~9.5 fps ceiling for one small image, ~5.4 fps for 288×144. Image sends can't overlap. | Tooltips use in-place text updates. Rebuilds happen only on screen changes. AR overlays get **~5 updates/s at best**, so registration has to tolerate latency (§6.3). The client serialises writes and drops stale ones. |
@@ -249,30 +249,58 @@ A `TeachController` (subclass of `bluebook_core.glasses.Controller`) registered 
 ### 6.3 Part 3 — Interactive AR highlighting (experimental)
 
 The G2 has no camera, so registration is **outside-in**: a fixed iPhone camera sees both the work
-area and the glasses.
+area and the wearer. **Constraint: no fiducials.** Nothing is attached to the glasses or the scene
+(no AprilTags or ArUco markers), so every pose comes from learned estimators on plain video.
 
-1. **Camera intrinsics:** ChArUco calibration (OpenCV) once per phone + resolution →
-   `data/calib/<camera_id>.json`.
-2. **Glasses pose:** small AprilTags (tag36h11, about 25–30 mm) on a rigid lightweight clip on the
-   G2 temples or brow → `solvePnP` per frame → `T_cam←tag`. Use 2 tags for viewpoint coverage.
+1. **Camera intrinsics, marker-free:** Apple Depth Pro estimates focal length from a single image and
+   returns metric depth. Take the median focal length over ~30 frames at the fixed stream resolution
+   and save it to `data/calib/camera_<id>.json`. Lens distortion on iPhone main cameras is small and
+   ignored in v1.
+2. **Head pose (stands in for glasses pose):** the glasses sit rigidly on the head, so we estimate
+   head pose from the scene camera:
+   - **Primary:** MediaPipe Face Landmarker (478 3D landmarks + facial transformation matrix). Fit the
+     landmarks to the canonical face model with `solvePnP` using the intrinsics → `T_cam←head`.
+     Correct the absolute distance with Depth Pro depth sampled on the face, since face-size priors
+     alone are only good to a few cm.
+   - **Wide angles:** 6DRepNet360 gives full-range head **rotation** (it's trained for the whole yaw
+     range) for when the face is turned away. Position then comes from head keypoints (MediaPipe Pose
+     nose/ears/eyes) plus Depth Pro.
+   - **Fusion:** if spike S3 shows the G2 IMU gives orientation or gyro data, fuse it: the IMU gives
+     fast relative rotation and the camera corrects drift (complementary filter). Without it, a
+     constant-velocity filter on the camera pose.
 3. **Target localisation:** on `StepChanged`, ground the `target` objects in the latest frame with the
    detector VLM (name + aliases + visual description + exemplar crops). Most targets in trade tasks are
    **static fixtures** (valves, nuts, breakers), so the 3D point is computed once and refreshed every
-   few seconds. 3D comes from intersecting the box-centre ray with a known plane (a world AprilTag on
-   the wall or bench). Upgrade paths: monocular metric depth, or a native ARKit/LiDAR camera app.
-4. **Display calibration:** G2 optics (FOV, virtual image distance, per-eye placement) aren't published,
-   so it's estimated per user with a **SPAAM**-style procedure. The glasses show a crosshair, the user
-   lines it up with a world point and taps, and this repeats ≥12 times at varied depths. A DLT then
-   solves the 3×4 projection `P: tag-frame → display px`. The literature (Grubert et al. survey) finds
-   varied-depth point sets most accurate.
-5. **Render loop:** each camera frame gives tag pose → project target → `OverlayFrame` (ring/rect at the
+   few seconds: box centre back-projected with the **median Depth Pro depth inside the box**. Upgrade
+   path: a native ARKit/LiDAR camera app.
+4. **Display calibration (head frame → display):** G2 optics (FOV, virtual image distance, per-eye
+   placement) aren't published, and where the glasses sit relative to the face-model origin varies by
+   user and by how they're worn. Both get absorbed into one 3×4 projection `P: head-frame → display px`,
+   estimated with a **SPAAM**-style procedure. The glasses show a crosshair, the user lines it up with a
+   **markerless world point** and taps, ≥12 times at varied depths, then a DLT solves `P`. The world
+   point is one the camera can localise without markers: the user's **index fingertip** (MediaPipe Hand
+   Landmarker + Depth Pro), held at different arm extensions for depth variety, or a VLM-grounded
+   static object point. The literature (Grubert et al. survey) finds varied-depth point sets most
+   accurate. Re-calibrate whenever the glasses are re-seated.
+5. **Render loop:** each camera frame gives head pose → project target → `OverlayFrame` (ring/rect at the
    target; an edge arrow if it's off-display) → core `Compositor` → only changed image tiles. Expected
-   motion-to-photon is ~250–400 ms (camera + detect + BLE image ~150 ms). Mitigations: generous ring
-   sizes, hiding the overlay while the head is moving fast (IMU magnitude or tag velocity), and a
-   text fallback ("◀ valve is to your left") when unregistered.
+   motion-to-photon is ~250–400 ms (camera + pose ~30–60 ms + BLE image ~150 ms).
 
-Success for cycle 1 is a demo-grade highlight on a static target during slow head motion. If spikes
-S1–S3 fail, Part 3 falls back to camera-only directional hints, which still help.
+**Accuracy budget, stated honestly.** Markerless head-pose estimators report roughly 3–5° mean
+rotation error on benchmarks (6DRepNet360 on BIWI/AFLW2000). One review gives the G2 field of view as
+~27.5°, which is unverified. At that FOV, 4° is about 80 px of the 576 px width. So v1 aims for
+**region-level** highlights: large rings (≥ 60 px), plus arrows and labels ("valve ▼"), rather than
+pixel-tight boxes. SPAAM per session removes the systematic part of the error, IMU fusion reduces
+jitter, and the overlay hides during fast head motion or when the pose is low-confidence. When there's
+no registration, it falls back to text ("◀ valve is to your left").
+
+**Camera placement.** Face-based pose needs the camera to see the wearer's face within about ±60°
+yaw, e.g. a tripod across the work area angled at both the fixture and the person. A pure top-down
+bird's-eye view still works for Part 2 scene checks, but Part 3 then only has 6DRepNet360 rotation and
+keypoints, so expect worse registration.
+
+Success for cycle 1 is a demo-grade region highlight on a static target during slow head motion. If
+spikes S1–S3/S7 fail, Part 3 falls back to camera-only directional hints, which still help.
 
 ## 7. Contracts and change control
 
@@ -288,11 +316,11 @@ S1–S3 fail, Part 3 falls back to camera-only directional hints, which still he
 |---|---|---|---|
 | S1 | Do black pixels of an image container occlude a text container beneath/above it? | P2 | keep the band layout (current default) |
 | S2 | Is the image identical in both eyes? How does it behave with near objects (parallax)? | P3 | calibrate for the dominant eye; bigger rings |
-| S3 | IMU: units, axes, real rate per `ImuReportPace` (orientation vs raw accel/gyro?) | P3 | motion gating only via tag velocity |
+| S3 | IMU: units, axes, real rate per `ImuReportPace` (orientation vs raw accel/gyro?) | P3 | no fusion; motion gating via camera head-pose velocity |
 | S4 | Does the whitelist entry `https://<host>.ts.net` also allow `wss://` to the same host? Is the Tailscale VPN on iOS stable while the Even app is backgrounded? | P2 | long-poll HTTP fallback; add `wss://` entry |
 | S5 | Does a full-screen `" "` text capture container emit scroll boundary events on swipe? Long-press/release on temples and ring? | P2 | use list capture for step view |
 | S6 | Real end-to-end display latency (input → text visible), image fps on glass | P2 | adjust tooltip/overlay pacing |
-| S7 | AprilTag detection range/angle with the G2 clip at 1–2 m on a 1280-px iPhone stream | P3 | larger tag, higher resolution, or 2 cameras |
+| S7 | Markerless head pose with G2 worn, at 1–2 m on a 1280-px iPhone stream: face-landmark dropout from the frames, rotation error vs IMU, usable yaw range | P3 | higher resolution, closer camera, or 2 cameras |
 
 ## 9. Latency budgets (p50 targets)
 
@@ -360,6 +388,9 @@ learners, native iOS camera app (ARKit), offline/on-device models, Even Hub stor
   <https://ai.google.dev/gemini-api/docs/image-understanding>, Live API
   <https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/live-api>
 - SAM 3: <https://ai.meta.com/research/publications/sam-3-segment-anything-with-concepts/>
+- Markerless pose/depth: MediaPipe Face Landmarker <https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker>;
+  6DRepNet360 (full-range head pose) <https://arxiv.org/abs/2309.07654>; Depth Pro (metric depth + focal
+  length) <https://arxiv.org/abs/2410.02073>
 - OST-HMD calibration: Grubert, Itoh, Moser, Swan, "A Survey of Calibration Methods for Optical
   See-Through Head-Mounted Displays", IEEE TVCG 2018 <https://arxiv.org/abs/1709.04299>
 - Procedural video understanding: Ego-Exo4D <https://arxiv.org/abs/2311.18259>; task graphs
