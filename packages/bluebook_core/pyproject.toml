@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
+bluebook = "bluebook_core.cli:main"
 bluebook-server = "bluebook_core.server:main"
 
 [build-system]

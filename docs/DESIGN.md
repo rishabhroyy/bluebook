@@ -82,7 +82,7 @@ they work → uploads it with `bluebook-ingest` (or a web upload later) → revi
 ```
 
 **Deployment (cycle 1):** one Python process (`uv run bluebook-server`) on the laptop. Every developer
-runs their own complete copy (`scripts/dev.sh`). Nothing is shared between laptops except git. `tailscale serve`
+runs their own complete copy (`uv run bluebook bootstrap` once, then `scripts/dev.sh`). Nothing is shared between laptops except git. `tailscale serve`
 terminates TLS for `https://<host>.<tailnet>.ts.net`. The wearer's phone and the scene-camera phone are
 both on the tailnet. Models run on cloud inference (Gemini API). Nothing runs on the glasses beyond the
 firmware.

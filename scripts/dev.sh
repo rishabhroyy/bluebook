@@ -10,11 +10,9 @@ need() { command -v "$1" >/dev/null || { echo "missing $1 — install: $2" >&2; 
 need uv "https://docs.astral.sh/uv/getting-started/installation/"
 need pnpm "npm i -g pnpm"
 
-[ -f .env ] || { cp .env.example .env; echo "created .env — put your own GEMINI_API_KEY in it"; }
 uv sync -q
+[ -f .env ] || uv run bluebook bootstrap || echo "bootstrap reported problems (above); starting anyway"  # first run here
 (cd apps/g2 && pnpm install --silent)
-mkdir -p data/skills
-[ -n "$(ls -A data/skills)" ] || cp -r fixtures/skills/* data/skills/  # first run: sample skill
 
 TS=$(command -v tailscale || echo /Applications/Tailscale.app/Contents/MacOS/Tailscale)
 lan_ip() { ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'; }

@@ -4,12 +4,20 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Load ./.env without overriding real env vars. ponytail: KEY=VALUE lines only; no quoting/expansion.
-if Path(".env").is_file():
-    for line in Path(".env").read_text().splitlines():
-        k, sep, v = line.partition("=")
-        if sep and k.strip() and not k.lstrip().startswith("#"):
-            os.environ.setdefault(k.strip(), v.strip())
+
+def read_env(path: Path = Path(".env")) -> dict[str, str]:
+    """Parse KEY=VALUE lines. ponytail: no quoting/expansion; `bluebook bootstrap` writes it that way."""
+    out = {}
+    if path.is_file():
+        for line in path.read_text().splitlines():
+            k, sep, v = line.partition("=")
+            if sep and k.strip() and not k.lstrip().startswith("#"):
+                out[k.strip()] = v.strip()
+    return out
+
+
+for _k, _v in read_env().items():  # ./.env never overrides real env vars
+    os.environ.setdefault(_k, _v)
 
 
 def _env(key: str, default: str) -> str:

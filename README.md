@@ -15,9 +15,15 @@ Each person runs their own complete copy (their own server, API key, skills and 
 so nobody waits on anyone else's machine.
 
 ```bash
-./scripts/dev.sh          # first run creates .env (add your GEMINI_API_KEY) and copies the sample skill
+uv run bluebook bootstrap # once per laptop: checks prereqs, asks for your Gemini key (hidden) and settings,
+                          # tests the key, writes .env, copies the sample skill, installs app deps
+./scripts/dev.sh          # run everything (it runs bootstrap for you if .env is missing)
 ./scripts/dev.sh --sim    # also opens the Even Hub simulator, so no glasses are needed
 ```
+
+Re-run `bluebook bootstrap` any time to change settings: current values are the defaults, and keys it
+doesn't ask about (e.g. `BB_MODEL_*` overrides) are kept. Non-interactive:
+`uv run bluebook bootstrap --yes --api-key "$GEMINI_API_KEY"`.
 
 `dev.sh` starts the server and the glasses-app dev server, runs `tailscale serve` if Tailscale is
 up, and prints a QR code. Scan it in the Even Realities app to load the glasses app **from your

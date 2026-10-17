@@ -140,3 +140,15 @@ def test_camera_frames_reach_hub():
         ws.send_text('{"type":"ping","t":0}')  # text after hello is ignored, not fatal
         ws.send_bytes(b"\xff\xd8jpeg2")
     assert hub.last(CameraFrame, "test-cam").jpeg == b"\xff\xd8jpeg2"
+
+
+def test_write_env_merges_and_preserves(tmp_path):
+    from bluebook_core.cli import write_env
+    from bluebook_core.config import read_env
+
+    p = tmp_path / ".env"
+    p.write_text("# keep me\nGEMINI_API_KEY=old\nBB_MODEL_VIDEO=custom\n")
+    write_env({"GEMINI_API_KEY": "new", "BB_PORT": "9000"}, p)
+    assert read_env(p) == {"GEMINI_API_KEY": "new", "BB_MODEL_VIDEO": "custom", "BB_PORT": "9000"}
+    assert p.read_text().startswith("# keep me\n")
+    assert p.stat().st_mode & 0o777 == 0o600
