@@ -14,13 +14,16 @@ import logging
 import re
 import time
 from collections.abc import Coroutine
+from functools import lru_cache
 from pathlib import Path
 
 from bluebook_core import display, glasses, hub, store
 from bluebook_core.config import config
 from bluebook_core.glasses import Controller, GlassesConnection
-from bluebook_core.protocol import CameraFrame, Input, StepChanged, StepTarget
+from bluebook_core.protocol import CameraFrame, ImageBox, Input, SetImage, StepChanged, StepTarget
 from bluebook_core.skill import SkillPackage, Step
+from PIL import Image
+from starlette.websockets import WebSocketState
 
 from . import render, tutor
 
@@ -29,10 +32,28 @@ log = logging.getLogger("bluebook.teach")
 SCREENS = ("library", "overview", "step", "done")
 SCENE_CAMERA = "scene"  # apps/camera ?id=scene
 FRESH_S = 2.0  # a scene frame older than this is not shown to a model
+SCENE_EVERY_S = 4.0  # scene check cadence while a fresh frame exists
+SCENE_CONFIDENT = 0.7  # suggest "looks done" after 2 agreeing checks at this confidence
 
 LISTENING = "● listening"
 THINKING = "thinking..."
 FAILED = "could not answer, hold to retry"
+LOOKS_DONE = "★ looks done, tap"
+
+# teach_page's image band (img_l + img_r): a step keyframe goes here unless Part 3 owns it.
+BAND = tuple(b for b in display.teach_page().boxes if isinstance(b, ImageBox))
+BAND_X, BAND_W, BAND_H = BAND[0].x, sum(b.w for b in BAND), max(b.h for b in BAND)
+
+
+@lru_cache(maxsize=64)
+def band_tiles(path: Path | None, _mtime: int = 0) -> tuple[SetImage, ...]:
+    """A keyframe letterboxed into the band and cut into its image boxes. No path: black, which is
+    see-through on the G2, so the previous step's picture never lingers."""
+    band = Image.new("L", (BAND_W, BAND_H))
+    if path:
+        with Image.open(path) as im:
+            band = display.fit(im, BAND_W, BAND_H)
+    return tuple(display.image_msg(b, band.crop((b.x - BAND_X, 0, b.x - BAND_X + b.w, b.h))) for b in BAND)
 
 
 def fresh_state() -> dict:
@@ -71,13 +92,23 @@ def step_targets(pkg: SkillPackage, step: Step) -> list[StepTarget]:
 
 
 class TeachController(Controller):
-    def __init__(self, skills_root: Path | None = None, sessions_dir: Path | None = None) -> None:
+    def __init__(
+        self, skills_root: Path | None = None, sessions_dir: Path | None = None, interactive: bool | None = None
+    ) -> None:
         self.skills_root = skills_root  # None = config.skills_dir (store's default)
         self.sessions_dir = sessions_dir or config.data_dir / "sessions"
+        # With Part 3 on, its compositor is the single writer of the image band.
+        self.interactive = config.interactive if interactive is None else interactive
         self.epoch = 0  # bumped on every navigation; async results from an older epoch are dropped
         self.question = 0  # bumped per utterance; an older question's answer is dropped
         self.note = ""  # transient status (listening / thinking / error), shown instead of the step title
         self.heard = ""  # last transcript, shown in the status line while its answer is up
+        self.suggest = False  # scene checks agree the step looks done (a suggestion, never an advance)
+        self.streak = 0  # consecutive confident "done" scene checks on this step
+        self.flagged: set[int] = set()  # common mistakes already shown on this step
+        self.last_check = 0.0
+        self._band_key: str | None = None  # keyframe currently in the band ("" = black)
+        self._scene_task: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------ lifecycle
@@ -88,9 +119,11 @@ class TeachController(Controller):
             conn.state.update(self._restore(conn.session))
         await self._render(conn)
         self._publish(conn)
+        if self._scene_task is None or self._scene_task.done():  # on_connect also runs after a push/pop
+            self._scene_task = self._spawn(self._scene_loop(conn), name="scene")
 
     async def on_disconnect(self, conn: GlassesConnection) -> None:
-        for t in self._tasks:
+        for t in list(self._tasks):
             t.cancel()
         # A quick reconnect may already have registered a new connection for this device; don't clear its step.
         if glasses.sessions.get(conn.session) is None:
@@ -255,8 +288,10 @@ class TeachController(Controller):
             s["step"] = step
         self.epoch += 1
         self.note = self.heard = ""
+        self.suggest, self.streak, self.flagged = False, 0, set()
         if cheap:  # step -> step stays on teach_page: two text updates, no ~165 ms rebuild
             await self._refresh(conn)
+            await self._band(conn)
         else:
             await self._render(conn)
         self._save(conn)
@@ -270,6 +305,8 @@ class TeachController(Controller):
                 await conn.show(display.message_page(self._overview(conn)))
             elif s["screen"] == "step":
                 await conn.show(display.teach_page(self._tip(conn), self._status(conn)))
+                self._band_key = None  # a rebuilt page starts with empty image boxes
+                await self._band(conn)
             elif s["screen"] == "done":
                 await conn.show(display.message_page(render.done_text(self._pkg(conn))))
             else:
@@ -336,8 +373,72 @@ class TeachController(Controller):
         s = conn.state
         if self.note:  # listening / thinking / error: no page counter, it's not about the pages
             return render.status_line(self._pkg(conn), s["step"], 0, 0, self.note)
-        heard = f'"{self.heard}"' if s["answer"] and self.heard else ""
-        return render.status_line(self._pkg(conn), s["step"], s["view"], len(self._pages(conn)), heard)
+        note = f'"{self.heard}"' if s["answer"] and self.heard else LOOKS_DONE if self.suggest else ""
+        return render.status_line(self._pkg(conn), s["step"], s["view"], len(self._pages(conn)), note)
+
+    # ------------------------------------------------------------- image band
+
+    async def _band(self, conn: GlassesConnection) -> None:
+        """The step's first keyframe in the band, or black. Only sent when it changes (~100 ms per tile)."""
+        if self.interactive:
+            return
+        pkg, step = self._pkg(conn), self._step(conn)
+        path, tiles = None, None
+        if step.keyframes:
+            try:
+                path = store.media_path(pkg.id, step.keyframes[0].path, self.skills_root)
+                tiles = await asyncio.to_thread(band_tiles, path, path.stat().st_mtime_ns)
+            except (OSError, ValueError, Image.DecompressionBombError) as e:  # missing/corrupt media: no picture
+                log.warning("keyframe %s/%s: %s", pkg.id, step.keyframes[0].path, e)
+                path = None
+        key = str(path) if path else ""
+        if key == self._band_key:
+            return
+        for m in tiles or band_tiles(None):
+            await conn.image(m)
+        self._band_key = key
+
+    # ------------------------------------------------------------ scene checks
+
+    async def _scene_loop(self, conn: GlassesConnection) -> None:
+        """Lives as long as the socket. One check in flight at most, since each tick awaits its check."""
+        while getattr(conn.ws, "client_state", None) != WebSocketState.DISCONNECTED:
+            await asyncio.sleep(1.0)
+            try:
+                await self._scene_tick(conn)
+            except Exception as e:  # noqa: BLE001 — model/network errors: skip this check, keep looping
+                log.warning("session %s: scene check failed: %r", conn.session, e)
+
+    async def _scene_tick(self, conn: GlassesConnection, now: float | None = None) -> None:
+        """Check the current step against a fresh scene frame every SCENE_EVERY_S. Suggests, never advances."""
+        now = time.time() if now is None else now
+        s = conn.state
+        if s["screen"] != "step" or now - self.last_check < SCENE_EVERY_S or self._stale(conn, self.epoch):
+            return
+        frame = hub.last(CameraFrame, SCENE_CAMERA)
+        if not frame or now - frame.t > FRESH_S:
+            return
+        pkg = self._pkg(conn)
+        step = pkg.steps[s["step"]]
+        if not step.success_criteria and not step.common_mistakes:
+            return
+        self.last_check, epoch = now, self.epoch
+        r = await tutor.check_scene(step, frame.jpeg)
+        if self._stale(conn, epoch):
+            return
+        confident = r.confidence >= SCENE_CONFIDENT
+        self.streak = self.streak + 1 if r.done and confident else 0
+        changed = False
+        if self.streak >= 2 and not self.suggest and not render.is_danger(pkg, step):
+            self.suggest = changed = True
+        m = r.mistake
+        known = bool(m and 1 <= m <= len(step.common_mistakes) and m not in self.flagged)
+        if r.issue and confident and known and not s["answer"]:  # don't stomp an answer being read
+            self.flagged.add(m)
+            s["answer"], s["view"] = render.answer_pages([f"Check: {r.issue}"]), 0
+            changed = True
+        if changed:
+            await self._refresh(conn)
 
     # -------------------------------------------------------------- hub + disk
 

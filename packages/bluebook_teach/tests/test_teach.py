@@ -1,6 +1,8 @@
 """Part 2 tests: the TeachController state machine against a fake glasses socket. No network, no models."""
 
 import asyncio
+import base64
+import io
 import json
 import os
 import shutil
@@ -12,10 +14,12 @@ import pytest
 from bluebook_core import display, glasses, hub, store
 from bluebook_core.glasses import GlassesConnection
 from bluebook_core.protocol import CameraFrame, Hello, Input, StepChanged
+from bluebook_core.skill import MediaRef, SafetyNote
 from bluebook_teach import render, tutor
-from bluebook_teach.controller import FAILED, LISTENING, THINKING, TeachController
-from bluebook_teach.tutor import LibraryPick, TutorReply
+from bluebook_teach.controller import FAILED, LISTENING, LOOKS_DONE, THINKING, TeachController
+from bluebook_teach.tutor import LibraryPick, SceneCheck, TutorReply
 from fastapi.testclient import TestClient
+from PIL import Image
 
 FIXTURES = Path(__file__).resolve().parents[3] / "fixtures/skills"
 SKILL = "fix-leaky-compression-fitting"
@@ -32,15 +36,21 @@ class FakeWS:
 
 
 @pytest.fixture
-def make(tmp_path, monkeypatch):
-    """make(root, session) -> (controller, connection) wired the way server.ws_glasses wires them."""
+async def make(tmp_path, monkeypatch):
+    """make(root, session, interactive) -> (controller, connection) wired the way server.ws_glasses wires them."""
+    made: list[TeachController] = []
 
-    def _make(root: Path = FIXTURES, session: str | None = None):
-        ctrl = TeachController(skills_root=root, sessions_dir=tmp_path / "sessions")
+    def _make(root: Path = FIXTURES, session: str | None = None, interactive: bool = False):
+        ctrl = TeachController(skills_root=root, sessions_dir=tmp_path / "sessions", interactive=interactive)
+        made.append(ctrl)
         monkeypatch.setattr(glasses, "_factory", lambda: ctrl)
         return ctrl, GlassesConnection(FakeWS(), session or f"t-{uuid4().hex[:8]}")
 
-    return _make
+    yield _make
+    for ctrl in made:  # stop scene loops (a real socket stops them on disconnect)
+        for t in list(ctrl._tasks):
+            t.cancel()
+        await asyncio.gather(*ctrl._tasks, return_exceptions=True)
 
 
 @pytest.fixture
@@ -198,8 +208,9 @@ def replies(monkeypatch):
 
 
 async def settle(ctrl):
-    while ctrl._tasks:
-        await asyncio.gather(*ctrl._tasks, return_exceptions=True)
+    """Wait for answer tasks (not the scene loop, which lives as long as the connection)."""
+    while pending := [t for t in ctrl._tasks if t.get_name() != "scene"]:
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def say(ctrl, conn, settle_after=True):
@@ -379,6 +390,157 @@ def test_skill_context_drops_what_the_tutor_cant_use():
     assert ctx["steps"][1]["provenance"] == "inferred"  # the tutor must see provenance to hedge
 
 
+# ------------------------------------------------------------------------- keyframes
+
+
+@pytest.fixture
+def keyframed(skills):
+    """Fixture copy where s1 has a real keyframe and s4 points at a missing file."""
+    pkg = store.load(SKILL, skills).model_copy(deep=True)
+    (skills / SKILL / "media").mkdir()
+    Image.linear_gradient("L").resize((640, 360)).convert("RGB").save(skills / SKILL / "media/s1.jpg")
+    pkg.steps[0].keyframes = [MediaRef(path="media/s1.jpg", t=3)]
+    pkg.steps[3].keyframes = [MediaRef(path="media/gone.jpg", t=50)]
+    store.save(pkg, root=skills)
+    return skills
+
+
+def images(sent) -> list[tuple[str, Image.Image]]:
+    return [(m["name"], Image.open(io.BytesIO(base64.b64decode(m["png_b64"])))) for m in sent if m["type"] == "image"]
+
+
+async def test_keyframe_fills_the_band_and_is_cleared_after(make, keyframed):
+    ctrl, conn = make(root=keyframed)
+    await ctrl.on_connect(conn)
+    await press(ctrl, conn, "list_select")
+    sent = await press(ctrl, conn, "tap")
+    assert [m["type"] for m in sent] == ["page", "image", "image"]
+    tiles = images(sent)
+    assert [n for n, _ in tiles] == ["img_l", "img_r"] and all(im.size == (288, 144) for _, im in tiles)
+    assert all(im.getextrema()[1] > 0 for _, im in tiles)  # a picture, not black
+
+    sent = await press(ctrl, conn, "tap")  # s2 has no keyframe: black (see-through) tiles replace s1's picture
+    assert [im.getextrema() for _, im in images(sent)] == [(0, 0), (0, 0)]
+    assert images(await press(ctrl, conn, "tap")) == []  # s3: still black, nothing resent
+    assert images(await press(ctrl, conn, "tap")) == []  # s4: missing file degrades to black, no crash
+    assert conn.state["step"] == 3
+
+
+async def test_part3_owns_the_band_when_interactive(make, keyframed):
+    ctrl, conn = make(root=keyframed, interactive=True)
+    await to_step(ctrl, conn, 1)
+    assert images(conn.ws.sent) == []
+
+
+# ---------------------------------------------------------------------- scene checks
+
+
+@pytest.fixture
+def scene(monkeypatch):
+    """Queue SceneCheck results; publish a fresh scene frame; returns (queue, calls, frame_time)."""
+    queue: list = []
+    calls: list = []
+
+    async def check(step, jpeg):
+        calls.append(step.id)
+        return queue.pop(0)
+
+    monkeypatch.setattr(tutor, "check_scene", check)
+    t = time.time()
+    hub.publish(CameraFrame(session="scene", t=t, jpeg=b"\xff\xd8", width=4, height=3))
+    return queue, calls, t
+
+
+DONE = SceneCheck(done=True, confidence=0.9)
+
+
+async def test_scene_suggests_after_two_agreeing_checks_and_never_advances(make, scene):
+    queue, calls, t = scene
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    queue += [DONE, DONE]
+    await ctrl._scene_tick(conn, now=t)
+    await ctrl._scene_tick(conn, now=t + 1)  # under the 4 s cadence: skipped
+    assert calls == ["s1"] and LOOKS_DONE not in status(conn)
+    ctrl.last_check -= 4  # pretend 4 s passed without making the frame stale
+    await ctrl._scene_tick(conn, now=t)
+    assert status(conn) == f"1/5 | {LOOKS_DONE} | pg 1/5"
+    assert conn.state["step"] == 0
+    await press(ctrl, conn, "tap")  # accepting the suggestion is just the normal tap
+    assert conn.state["step"] == 1 and LOOKS_DONE not in status(conn)
+
+
+async def test_scene_streak_breaks_on_a_not_done_check(make, scene):
+    queue, calls, t = scene
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    queue += [DONE, SceneCheck(done=True, confidence=0.4), DONE]
+    for _ in range(3):
+        ctrl.last_check = 0
+        await ctrl._scene_tick(conn, now=t)
+    assert len(calls) == 3 and not ctrl.suggest
+
+
+async def test_scene_never_confirms_a_danger_step(make, skills, scene):
+    queue, calls, t = scene
+    pkg = store.load(SKILL, skills).model_copy(deep=True)
+    pkg.safety.append(SafetyNote(text="Live wires.", severity="danger", step_ids=["s1"]))
+    store.save(pkg, root=skills)
+    ctrl, conn = make(root=skills)
+    await to_step(ctrl, conn)
+    queue += [DONE] * 3
+    for _ in range(3):
+        ctrl.last_check = 0
+        await ctrl._scene_tick(conn, now=t)
+    assert len(calls) == 3 and not ctrl.suggest and LOOKS_DONE not in status(conn)
+
+
+async def test_scene_flags_a_known_mistake_once(make, scene):
+    queue, _calls, t = scene
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    wrong = SceneCheck(done=False, confidence=0.8, mistake=1, issue="That's the hot valve. Use the cold one.")
+    queue += [wrong, wrong, SceneCheck(confidence=0.9, mistake=7, issue="made up")]
+    ctrl.last_check = 0
+    await ctrl._scene_tick(conn, now=t)
+    assert tip(conn) == "Check: That's the hot valve. Use the cold one."
+    await press(ctrl, conn, "scroll_down")  # dismiss
+    for _ in range(2):  # same mistake again, then a mistake number that isn't in the step: ignored
+        ctrl.last_check = 0
+        await ctrl._scene_tick(conn, now=t)
+    assert tip(conn) == "Turn the shutoff valve clockwise until it stops."
+
+
+async def test_scene_skips_stale_frames_and_other_screens(make, scene):
+    _queue, calls, t = scene
+    ctrl, conn = make()
+    await ctrl.on_connect(conn)
+    await ctrl._scene_tick(conn, now=t)  # library: no checks
+    await press(ctrl, conn, "list_select")
+    await press(ctrl, conn, "tap")
+    await ctrl._scene_tick(conn, now=t + 10)  # frame is 10 s old: camera gone
+    assert calls == []
+
+
+async def test_scene_result_for_an_old_step_is_dropped(make, scene, monkeypatch):
+    _queue, _calls, t = scene
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    gate = asyncio.Event()
+
+    async def slow(step, jpeg):
+        await gate.wait()
+        return SceneCheck(confidence=0.9, mistake=1, issue="stale")
+
+    monkeypatch.setattr(tutor, "check_scene", slow)
+    tick = asyncio.create_task(ctrl._scene_tick(conn, now=t))
+    await asyncio.sleep(0)
+    await press(ctrl, conn, "tap")
+    gate.set()
+    await tick
+    assert "stale" not in tip(conn)
+
+
 # ------------------------------------------------------------------------ persistence
 
 
@@ -450,6 +612,13 @@ def test_paginate_respects_limit_and_word_boundaries():
     assert all(not p.startswith(" ") and not p.endswith(" ") for p in pages)
     assert "".join(pages[-3:]).endswith("x" * 130)
     assert render.paginate("") == []
+
+
+def test_is_danger_covers_step_and_whole_task_notes():
+    pkg = store.load(SKILL, FIXTURES).model_copy(deep=True)
+    assert not render.is_danger(pkg, pkg.steps[3])  # "caution" only
+    pkg.safety.append(SafetyNote(text="Gas line nearby.", severity="danger"))  # no step_ids: whole task
+    assert all(render.is_danger(pkg, st) for st in pkg.steps)
 
 
 def test_overview_keeps_safety_when_truncated():
