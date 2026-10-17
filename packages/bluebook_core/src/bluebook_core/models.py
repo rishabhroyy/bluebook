@@ -13,8 +13,10 @@ the mainstream API that natively ingests video *with its audio track* plus times
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import time
+import wave
 from pathlib import Path
 
 import numpy as np
@@ -48,9 +50,6 @@ def image(data: bytes, mime: str = "image/jpeg") -> types.Part:
 
 def audio_pcm16k(pcm: bytes) -> types.Part:
     """Raw G2 mic audio (16 kHz s16le mono) -> WAV part."""
-    import io
-    import wave
-
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
@@ -127,9 +126,13 @@ async def generate[T: BaseModel](
 async def embed(items: list[str | bytes], task: str = "RETRIEVAL_DOCUMENT") -> np.ndarray:
     """Embed text and/or JPEG bytes. Returns float32 [n, dim], L2-normalised.
     Use task="RETRIEVAL_QUERY" for queries."""
+    if not items:
+        return np.zeros((0, 0), dtype=np.float32)
     contents = [i if isinstance(i, str) else image(i) for i in items]
     out = []
-    for c in contents:  # ponytail: one call per item; batch when ingest time matters
+    # One call per item on purpose: multimodal embedding models may merge all parts of one
+    # request into a single vector. ponytail: parallelise with asyncio.gather if ingest is slow.
+    for c in contents:
         r = await client().aio.models.embed_content(
             model=model_id("embedder"), contents=c, config=types.EmbedContentConfig(task_type=task)
         )

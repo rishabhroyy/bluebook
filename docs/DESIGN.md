@@ -9,9 +9,10 @@ teaches it back step by step on the glasses. The learner can ask questions by vo
 scene camera lets the AI see what they're doing.
 
 Cycle 1 has three parts, built in parallel on separate branches and joined through the contracts
-in `packages/bluebook_core`:
+in `packages/bluebook_core`. Each developer creates their own branch from `main`; the names below
+are suggestions.
 
-| Part | Branch | What it does | Status |
+| Part | Suggested branch | What it does | Status |
 |---|---|---|---|
 | 1. Perception / learning | `part1-perception` | iPhone video **and its audio** → `SkillPackage` on disk | core |
 | 2. Playback / teaching | `part2-teaching` | Skill library on glasses, step-by-step tooltips, voice Q&A, optional scene camera | core |
@@ -35,7 +36,7 @@ on 2026-10-17, unless marked *community*. Sources are in §13.
 | **Update costs (community, measured):** text update ~83 ms, page rebuild ~165 ms (may flicker), image ~104 ms + 3.9 ms/KB, ~9.5 fps ceiling for one small image, ~5.4 fps for 288×144. Image sends can't overlap. | Tooltips use in-place text updates. Rebuilds happen only on screen changes. AR overlays get **~5 updates/s at best**, so registration has to tolerate latency (§6.3). The client serialises writes and drops stale ones. |
 | **Network:** `fetch`/WebSocket from the WebView. Destinations must be on the `app.json` `network` whitelist as full origins (no wildcards), **and** CORS applies. HTTPS is recommended. Plain http only works for LAN dev. | One stable origin: `https://<laptop>.<tailnet>.ts.net` via `tailscale serve`, with a valid cert. CORS is enabled on the server. Whitelisting `wss://` isn't documented → spike S4. |
 | **Lifecycle:** on iOS the WebView keeps running while the phone is locked. On Android it may be killed, which drops sockets and stops the mic. The root page must exit with `shutDownPageContainer(1)` on double-tap or the store rejects the app. | The client reconnects with backoff and resends `hello`. The session is keyed by glasses serial, so a reconnect resumes the same lesson. The server decides when to exit. |
-| **IMU:** `imuControl(on, P100..P1000)` gives `x,y,z` floats. **Units and axes are undocumented**, and the pace values are "protocol codes, not Hz". | We can't count on the IMU for head pose. Part 3 has to characterise it (spike S3) and uses it at most for motion gating and short-term prediction. |
+| **IMU:** `imuControl(on, P100..P1000)` gives `x,y,z` floats. **Units and axes are undocumented**, and the pace values are "protocol codes, not Hz". | We can't count on the IMU for head pose on its own. Part 3 characterises it (spike S3) and, if it's usable, fuses it with camera head pose for motion gating and smoothing. |
 | **Gestures (SDK 0.0.16):** click, double click, scroll top/bottom boundary, **long press + release**. Quirks: click can arrive as `undefined`, list index 0 can be missing, the simulator and hardware send different event shapes. | Long press is push-to-talk everywhere. The client normalises the quirks once (`apps/g2/src/main.ts`). |
 
 ## 2. Users and core flows
@@ -124,8 +125,8 @@ never copy from it.
 | `skill.py` | `SkillPackage` schema (pydantic) + `check()` referential integrity | P1 writes; P2, P3 read |
 | `store.py` | `save/load/list_skills/search/media_path` for `data/skills/<id>/`; cosine search over `embeddings.npy`, keyword fallback | all |
 | `models.py` | `generate(role, contents, schema=...)`, `embed(...)`, `upload(path)`, `video(file, fps, start, end)`, `image()`, `audio_pcm16k()` | all |
-| `config.py` | env config, model id per role, feature flags | all |
-| `protocol.py` | wire messages (glasses + camera WS) and hub events (`StepChanged`, `SceneObservation`, `OverlayFrame`, `CameraFrame`) | all + G2 app |
+| `config.py` | env vars + `./.env` (run from repo root), model id per role, feature flags | all |
+| `protocol.py` | wire messages (glasses + camera WS), hub event models, `ShowPage` validation against SDK limits | all + G2 app |
 | `hub.py` | in-process pub/sub, `last()` for late joiners; events: `StepChanged`, `OverlayFrame`, `CameraFrame`, `ImuSample`, `SceneObservation` | P2, P3 |
 | `display.py` | shared page layouts (`teach_page`, `list_page`, `message_page`), PNG quantising, keyframe `fit()`, overlay `Compositor` | P2, P3 |
 | `glasses.py` | `GlassesConnection` (send page/text/image/control, push/pop controller), `Controller` base, `EchoController` default | P2, P3 |
@@ -182,7 +183,7 @@ display costs.
 ```
 teach_page   y=0   ┌──────────────── tip (text, id 4) ─────────────────┐  tooltip, ≤3 lines
              y=88  ├──── img_l (image 288×144, id 2) ─┬─ img_r (id 3) ─┤  keyframe (P2) or AR overlay (P3)
-             y=232 ├────────────── status (text, id 5, dim) ───────────┤  "Step 2/5 · ● listening · ✓ looks done"
+             y=240 ├────────────── status (text, id 5, dim) ───────────┤  "Step 2/5 · ● listening · ✓ looks done"
              y=288 └───────────────────────────────────────────────────┘  bg (text, id 1, full screen, capture, z=0)
 list_page    title (id 1) + native list (id 2, capture, ≤20 items × 64 chars)
 message_page one full-screen capture text (id 1), firmware scrolls overflow
@@ -348,9 +349,9 @@ spikes S1–S3/S7 fail, Part 3 falls back to camera-only directional hints, whic
 
 ```
 packages/bluebook_core/          shared lib + server     (main only; changes via contract PR)
-packages/bluebook_perception/    Part 1                  (branch part1-perception)
-packages/bluebook_teach/         Part 2                  (branch part2-teaching)
-packages/bluebook_interactive/   Part 3                  (branch part3-interactive)
+packages/bluebook_perception/    Part 1                  (its own branch, e.g. part1-perception)
+packages/bluebook_teach/         Part 2                  (e.g. part2-teaching)
+packages/bluebook_interactive/   Part 3                  (e.g. part3-interactive)
 apps/g2/                         shared glasses thin client (main; P2 may PR transport fixes)
 apps/camera/                     shared scene-camera page   (main)
 contracts/                       generated schemas

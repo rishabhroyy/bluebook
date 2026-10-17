@@ -2,7 +2,7 @@
 
 Canvas 576x288, 16 greys of green, black = off (see-through). Measured costs
 (even-g2-notes/performance.md): text upgrade ~83 ms, rebuild ~165 ms, image ~104 ms + 3.9 ms/KB.
-Layout geometry here is a v1 guess; Part 2 owns tuning it on hardware (docs/DESIGN.md §6.1).
+Layout geometry here is a v1 guess; Part 2 owns tuning it on hardware (docs/DESIGN.md §5.2, §8).
 """
 
 from __future__ import annotations

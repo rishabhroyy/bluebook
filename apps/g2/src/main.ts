@@ -23,7 +23,9 @@ import type { Hello, Input, Protocol, ShowPage } from './protocol'
 type ServerMsg = Protocol['server']
 type ClientMsg = Protocol['client']
 
-const SERVER = import.meta.env.VITE_BB_SERVER as string
+// Dev (QR sideload of the Vite server): same origin, Vite proxies /ws to the bluebook server.
+// Packaged .ehpk: set VITE_BB_SERVER=wss://<host>.ts.net/ws/glasses at build time.
+const SERVER = (import.meta.env.VITE_BB_SERVER as string | undefined) || `${location.origin.replace(/^http/, 'ws')}/ws/glasses`
 const logEl = document.getElementById('log')!
 const log = (s: string) => {
   logEl.textContent = `${new Date().toISOString().slice(11, 19)} ${s}\n${logEl.textContent}`.slice(0, 4000)
@@ -137,7 +139,6 @@ function onEvent(ev: EvenHubEvent) {
   // Quirk: CLICK_EVENT (0) often arrives as undefined after SDK fromJson.
   const type = e.eventType ?? OsEventTypeList.CLICK_EVENT
   if (type in lifecycle) {
-    if (type === OsEventTypeList.FOREGROUND_ENTER_EVENT && (!ws || ws.readyState > WebSocket.OPEN)) connect()
     return send({ type: 'lifecycle', event: lifecycle[type as keyof typeof lifecycle], t: now() })
   }
   const kind = ({

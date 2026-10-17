@@ -66,6 +66,7 @@ app = FastAPI(title="bluebook", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _background = []
+_mounted = []
 for name in PARTS:
     try:
         mod = importlib.import_module(name)
@@ -76,12 +77,13 @@ for name in PARTS:
         continue
     if bg := mod.setup(app):
         _background.append(bg)
+    _mounted.append(name)
     log.info("mounted %s", name)
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "parts": PARTS, "sessions": list(sessions)}
+    return {"ok": True, "parts": _mounted, "sessions": list(sessions)}
 
 
 @app.get("/skills")
@@ -100,9 +102,12 @@ def skill(skill_id: str):
 @app.get("/skills/{skill_id}/media/{rel:path}")
 def media(skill_id: str, rel: str):
     try:
-        return FileResponse(store.media_path(skill_id, rel))
+        p = store.media_path(skill_id, rel)
     except ValueError:
         raise HTTPException(404)
+    if not p.is_file():
+        raise HTTPException(404)
+    return FileResponse(p)
 
 
 @app.get("/camera")
@@ -113,12 +118,15 @@ def camera_page():
 @app.websocket("/ws/glasses")
 async def ws_glasses(ws: WebSocket):
     await ws.accept()
-    hello = Hello.model_validate_json(await ws.receive_text())
+    try:
+        hello = Hello.model_validate_json(await ws.receive_text())
+    except (ValidationError, WebSocketDisconnect, KeyError):
+        return await ws.close(1008)
     session = str(hello.device.get("sn") or f"anon-{id(ws)}")
     conn = sessions[session] = GlassesConnection(ws, session)
     log.info("glasses connected session=%s", session)
     try:
-        await conn.controller.on_connect(conn)
+        await _safe(conn.controller.on_connect(conn))
         while True:
             m = await ws.receive()
             if m["type"] == "websocket.disconnect":
@@ -133,15 +141,15 @@ async def ws_glasses(ws: WebSocket):
                 continue
             match msg:
                 case Input():
-                    await conn.controller.on_input(conn, msg)
+                    await _safe(conn.controller.on_input(conn, msg))
                 case AudioStart():
                     conn.audio_start()
                 case AudioEnd():
                     if pcm := conn.audio_end():
-                        await conn.controller.on_utterance(conn, pcm)
+                        await _safe(conn.controller.on_utterance(conn, pcm))
                 case Imu():
                     hub.publish(ImuSample(session=session, x=msg.x, y=msg.y, z=msg.z, t=msg.t))
-                    await conn.controller.on_imu(conn, msg)
+                    await _safe(conn.controller.on_imu(conn, msg))
                 case Ping():
                     await conn.send(Pong(t=msg.t))
                 case _:
@@ -151,23 +159,41 @@ async def ws_glasses(ws: WebSocket):
     finally:
         if sessions.get(session) is conn:
             del sessions[session]
-        await conn.controller.on_disconnect(conn)
+        await _safe(conn.controller.on_disconnect(conn))
         log.info("glasses disconnected session=%s", session)
+
+
+async def _safe(coro) -> None:
+    """A bug in a part's controller must not drop the glasses connection."""
+    try:
+        await coro
+    except WebSocketDisconnect:
+        raise
+    except Exception:
+        log.exception("controller handler failed")
 
 
 @app.websocket("/ws/camera")
 async def ws_camera(ws: WebSocket):
     await ws.accept()
-    hello = CameraHello.model_validate_json(await ws.receive_text())
+    try:
+        hello = CameraHello.model_validate_json(await ws.receive_text())
+    except (ValidationError, WebSocketDisconnect, KeyError):
+        return await ws.close(1008)
     log.info("camera %s connected %dx%d", hello.camera_id, hello.width, hello.height)
     try:
         while True:
-            jpeg = await ws.receive_bytes()
+            m = await ws.receive()
+            if m["type"] == "websocket.disconnect":
+                break
+            if not (jpeg := m.get("bytes")):
+                continue
             hub.publish(
                 CameraFrame(session=hello.camera_id, t=time.time(), jpeg=jpeg, width=hello.width, height=hello.height)
             )
     except WebSocketDisconnect:
-        log.info("camera %s disconnected", hello.camera_id)
+        pass
+    log.info("camera %s disconnected", hello.camera_id)
 
 
 def main() -> None:

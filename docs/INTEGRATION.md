@@ -2,13 +2,15 @@
 
 ## Branches
 
+Each developer creates their own branch from `main`. Suggested names:
+
 ```
 main ─┬─ part1-perception   (packages/bluebook_perception)
       ├─ part2-teaching     (packages/bluebook_teach)
       └─ part3-interactive  (packages/bluebook_interactive)
 ```
 
-All three branches start from the same `main` commit, which already has the shared core, the server,
+All branches start from `main`, which already has the shared core, the server,
 the G2 thin client, the camera page, the contracts, and a fixture skill. No glue code needs writing
 later. The seams already exist:
 
@@ -70,7 +72,7 @@ Before each merge: rebase on main, run the full test suite, then run the smoke c
 ## Demo-day runbook
 
 ```bash
-cp .env.example .env               # set GEMINI_API_KEY, BB_PUBLIC_URL
+cp .env.example .env               # set GEMINI_API_KEY; put your ts.net origin in apps/g2/app.json
 uv sync && uv run bluebook-server  # laptop
 tailscale serve --bg 8787          # https://<host>.<tailnet>.ts.net
 cd apps/g2 && pnpm dev && pnpm qr  # scan with Even Realities app (phone on tailnet)

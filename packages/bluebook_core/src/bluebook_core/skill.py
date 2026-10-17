@@ -169,10 +169,16 @@ class SkillPackage(BaseModel):
     source: Source
 
     def step(self, step_id: str) -> Step:
-        return next(s for s in self.steps if s.id == step_id)
+        for s in self.steps:
+            if s.id == step_id:
+                return s
+        raise KeyError(step_id)
 
     def object(self, object_id: str) -> ObjectRef:
-        return next(o for o in self.objects if o.id == object_id)
+        for o in self.objects:
+            if o.id == object_id:
+                return o
+        raise KeyError(object_id)
 
     def check(self) -> list[str]:
         """Referential-integrity problems pydantic can't see. Empty list = valid."""

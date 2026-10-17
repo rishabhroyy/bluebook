@@ -22,10 +22,11 @@ log = logging.getLogger("bluebook.glasses")
 
 class Controller:
     """Override what you need. All handlers run on the connection's receive loop:
-    keep them fast; spawn tasks for model calls (asyncio.create_task)."""
+    keep them fast; spawn tasks for model calls (asyncio.create_task). An exception
+    in a handler is logged and the connection stays up."""
 
     async def on_connect(self, conn: GlassesConnection) -> None:
-        pass
+        """Called on every (re)connect AND when a pushed controller pops: redraw from conn.state, don't reset it."""
 
     async def on_input(self, conn: GlassesConnection, ev: Input) -> None:
         pass
@@ -59,6 +60,7 @@ class EchoController(Controller):
 
 _factory: Callable[[], Controller] = EchoController
 sessions: dict[str, GlassesConnection] = {}
+_states: dict[str, dict] = {}  # session -> conn.state, kept across reconnects (ponytail: in-memory; lost on restart)
 
 
 def set_controller(factory: Callable[[], Controller]) -> None:
@@ -71,7 +73,8 @@ class GlassesConnection:
         self.ws = ws
         self.session = session  # stable per device (serial) so a reconnect resumes the same session
         self.page: ShowPage | None = None
-        self.state: dict = {}  # controller-owned scratch space that survives controller push/pop
+        # Controller-owned scratch space. Survives controller push/pop and reconnects of the same device.
+        self.state: dict = _states.setdefault(session, {})
         self._stack: list[Controller] = [_factory()]
         self._send_lock = asyncio.Lock()
         self._compositor = display.Compositor()

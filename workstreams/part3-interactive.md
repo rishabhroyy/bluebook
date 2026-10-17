@@ -1,6 +1,6 @@
 # Part 3 — Interactive AR highlighting (experimental)
 
-Branch: `part3-interactive` · Package: `packages/bluebook_interactive/` · Enabled only with `BB_INTERACTIVE=1`
+Suggested branch: `part3-interactive` · Package: `packages/bluebook_interactive/` · Enabled only with `BB_INTERACTIVE=1`
 Read first: `AGENTS.md`, `docs/DESIGN.md` §1, §5, §6.3, §8
 
 ## Goal

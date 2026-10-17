@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 PROTOCOL_VERSION = 1
 
@@ -32,6 +32,12 @@ class Container(BaseModel):
     w: int = Field(ge=0, le=576)
     h: int = Field(ge=0, le=288)
     z: int | None = None  # zOrderIndex; if any container sets it, all must
+
+    @model_validator(mode="after")
+    def _on_canvas(self):
+        if self.x + self.w > 576 or self.y + self.h > 288:
+            raise ValueError(f"{self.name}: box exceeds 576x288 canvas")
+        return self
 
 
 class TextBox(Container):
@@ -74,6 +80,23 @@ class ShowPage(BaseModel):
     type: Literal["page"] = "page"
     boxes: list[AnyBox]
 
+    @model_validator(mode="after")
+    def _sdk_limits(self):
+        # Same rules the SDK enforces (it rejects the page otherwise); failing here gives a Python traceback instead.
+        n_img = sum(b.kind == "image" for b in self.boxes)
+        if n_img > 4 or len(self.boxes) - n_img > 8:
+            raise ValueError("max 4 image + 8 text/list boxes")
+        if sum(getattr(b, "capture", False) for b in self.boxes) != 1:
+            raise ValueError("exactly one box must have capture=True")
+        for attr in ("id", "name"):
+            vals = [getattr(b, attr) for b in self.boxes]
+            if len(set(vals)) != len(vals):
+                raise ValueError(f"duplicate box {attr}")
+        zs = [b.z for b in self.boxes]
+        if any(z is not None for z in zs) and (None in zs or len(set(zs)) != len(zs)):
+            raise ValueError("z: set on all boxes or none, and unique")
+        return self
+
 
 class SetText(BaseModel):
     """In-place text update (textContainerUpgrade, ~83 ms, no flicker)."""
@@ -98,7 +121,7 @@ class SetImage(BaseModel):
 class Control(BaseModel):
     type: Literal["control"] = "control"
     mic: bool | None = None  # audioControl(on, Glasses)
-    imu_pace: int | None = None  # 0 = off, else ImuReportPace code 100..1000
+    imu_pace: int | None = Field(default=None, ge=0, le=1000, multiple_of=100)  # 0 = off, else ImuReportPace code
     exit: bool = False  # shutDownPageContainer(1) (system confirm dialog)
 
 
@@ -233,7 +256,7 @@ class SceneObservation(BaseModel):
     camera_id: str
     t: float
     objects: dict[str, tuple[float, float, float, float]]  # object_id -> normalised box x0,y0,x1,y1
-    glasses_visible: bool = False
+    head_visible: bool = False  # wearer's head pose currently tracked (marker-free, DESIGN §6.3)
 
 
 class Arrow(BaseModel):

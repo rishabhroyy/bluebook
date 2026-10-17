@@ -1,6 +1,6 @@
 # Part 1 — Perception / learning pipeline
 
-Branch: `part1-perception` · Package: `packages/bluebook_perception/` · Read first: `AGENTS.md`, `docs/DESIGN.md` §1, §4, §5.1, §6.1
+Suggested branch: `part1-perception` · Package: `packages/bluebook_perception/` · Read first: `AGENTS.md`, `docs/DESIGN.md` §1, §4, §5.1, §6.1
 
 ## Goal
 

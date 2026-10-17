@@ -5,14 +5,15 @@ brief in `workstreams/`, then `docs/INTEGRATION.md`.
 
 ## Which part am I?
 
-Check `git branch --show-current`:
+Your human will tell you, or the branch name will (suggested names below). If neither does, ask
+before editing anything.
 
-| Branch | Your brief | You may edit |
+| Part (suggested branch) | Your brief | You may edit |
 |---|---|---|
 | `part1-perception` | `workstreams/part1-perception.md` | `packages/bluebook_perception/**`, `fixtures/skills/` (add) |
 | `part2-teaching` | `workstreams/part2-teaching.md` | `packages/bluebook_teach/**`, `docs/spikes.md`, `fixtures/skills/` (add) |
 | `part3-interactive` | `workstreams/part3-interactive.md` | `packages/bluebook_interactive/**`, `docs/spikes.md`, `fixtures/skills/` (add) |
-| `main` | — | core/contracts only, via small PRs (see INTEGRATION §Contract changes) |
+| shared / `main` | — | core/contracts only, via small PRs (see INTEGRATION §Contract changes) |
 
 Everything else (`packages/bluebook_core`, `apps/`, `contracts/`, `scripts/`) is **shared**. Don't
 change it on a part branch. If you need a change there, stop and make a separate contract PR to `main`.
@@ -25,7 +26,7 @@ change it on a part branch. If you need a change there, stop and make a separate
 - Cross-part events: `bluebook_core.hub` with the event models in `protocol.py`.
 - Config/flags/secrets: `bluebook_core.config` (env vars `BB_*`, `GEMINI_API_KEY`).
 
-## Commands
+## Commands (run from the repo root; config reads `./.env`)
 
 ```bash
 uv sync                                   # Python workspace (uv; Python ≥3.12)

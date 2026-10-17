@@ -91,6 +91,9 @@
         "imu_pace": {
           "anyOf": [
             {
+              "maximum": 1000,
+              "minimum": 0,
+              "multipleOf": 100,
               "type": "integer"
             },
             {

@@ -1,6 +1,6 @@
 # Part 2 — Playback / teaching mode
 
-Branch: `part2-teaching` · Package: `packages/bluebook_teach/` · Read first: `AGENTS.md`, `docs/DESIGN.md` §1, §2, §5.2, §6.2, §8
+Suggested branch: `part2-teaching` · Package: `packages/bluebook_teach/` · Read first: `AGENTS.md`, `docs/DESIGN.md` §1, §2, §5.2, §6.2, §8
 
 ## Goal
 
@@ -32,9 +32,10 @@ product logic there), other parts.
   absent), and optionally `hub.subscribe(SceneObservation)` from P3.
 - **Image band ownership:** when `config.interactive` is on and P3 is producing overlays, don't write
   `img_l/img_r` yourself (P3's compositor owns them). Otherwise show the step keyframe there.
-- Session state goes in `conn.state` (it survives P3's calibration controller push/pop). Persist
-  `{skill_id, step_id}` per session to `data/sessions/<session>.json` so an Android WebView kill or
-  reconnect resumes the lesson.
+- Session state goes in `conn.state`. Core keeps it in memory across P3's calibration controller
+  push/pop **and** across reconnects of the same glasses (Android WebView kills, phone lock), and
+  `on_connect` is called again each time, so redraw from it. Also persist `{skill_id, step_id}` to
+  `data/sessions/<session>.json` so a lesson survives a server restart.
 
 ## UX contract (from DESIGN §6.2; change only with the owner)
 

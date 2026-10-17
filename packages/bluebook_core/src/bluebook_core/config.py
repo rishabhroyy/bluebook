@@ -1,8 +1,15 @@
-"""All runtime config, from env (and .env via `uv run --env-file .env`). One place, no per-part config files."""
+"""All runtime config, from env vars and ./.env. One place, no per-part config files."""
 
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# Load ./.env without overriding real env vars. ponytail: KEY=VALUE lines only; no quoting/expansion.
+if Path(".env").is_file():
+    for line in Path(".env").read_text().splitlines():
+        k, sep, v = line.partition("=")
+        if sep and k.strip() and not k.lstrip().startswith("#"):
+            os.environ.setdefault(k.strip(), v.strip())
 
 
 def _env(key: str, default: str) -> str:
@@ -26,8 +33,6 @@ class Models:
 class Config:
     host: str = _env("BB_HOST", "127.0.0.1")  # tailscale serve proxies https -> here
     port: int = int(_env("BB_PORT", "8787"))
-    # Public origin as seen by the phone, e.g. https://laptop.tail1234.ts.net — must be in apps/g2/app.json whitelist
-    public_url: str = _env("BB_PUBLIC_URL", "http://localhost:8787")
     data_dir: Path = Path(_env("BB_DATA_DIR", "data"))
     google_api_key: str = _env("GEMINI_API_KEY", "")
     interactive: bool = _env("BB_INTERACTIVE", "0") == "1"  # enable Part 3
