@@ -1,0 +1,13 @@
+[project]
+name = "bluebook-interactive"
+version = "0.1.0"
+description = "Part 3 (experimental): scene grounding, glasses pose, AR overlay"
+requires-python = ">=3.12"
+dependencies = ["bluebook-core"]
+
+[tool.uv.sources]
+bluebook-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

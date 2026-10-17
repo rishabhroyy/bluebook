@@ -1,0 +1,798 @@
+{
+  "$defs": {
+    "AudioEnd": {
+      "properties": {
+        "type": {
+          "const": "audio_end",
+          "default": "audio_end",
+          "type": "string"
+        },
+        "utterance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "utterance"
+      ],
+      "title": "AudioEnd",
+      "type": "object"
+    },
+    "AudioStart": {
+      "properties": {
+        "type": {
+          "const": "audio_start",
+          "default": "audio_start",
+          "type": "string"
+        },
+        "utterance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "utterance"
+      ],
+      "title": "AudioStart",
+      "type": "object"
+    },
+    "CameraHello": {
+      "properties": {
+        "type": {
+          "const": "camera_hello",
+          "default": "camera_hello",
+          "type": "string"
+        },
+        "camera_id": {
+          "type": "string"
+        },
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        },
+        "fps": {
+          "type": "number"
+        },
+        "device": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "camera_id",
+        "width",
+        "height",
+        "fps"
+      ],
+      "title": "CameraHello",
+      "type": "object"
+    },
+    "Control": {
+      "properties": {
+        "type": {
+          "const": "control",
+          "default": "control",
+          "type": "string"
+        },
+        "mic": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "imu_pace": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "exit": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "title": "Control",
+      "type": "object",
+      "required": [
+        "type"
+      ]
+    },
+    "DeviceStatus": {
+      "properties": {
+        "type": {
+          "const": "status",
+          "default": "status",
+          "type": "string"
+        },
+        "battery": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "wearing": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "charging": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "DeviceStatus",
+      "type": "object",
+      "required": [
+        "type"
+      ]
+    },
+    "Hello": {
+      "properties": {
+        "type": {
+          "const": "hello",
+          "default": "hello",
+          "type": "string"
+        },
+        "protocol": {
+          "default": 1,
+          "type": "integer"
+        },
+        "client": {
+          "default": "g2",
+          "enum": [
+            "g2",
+            "sim"
+          ],
+          "type": "string"
+        },
+        "device": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        }
+      },
+      "title": "Hello",
+      "type": "object",
+      "required": [
+        "type"
+      ]
+    },
+    "ImageBox": {
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "name": {
+          "maxLength": 16,
+          "type": "string"
+        },
+        "x": {
+          "maximum": 576,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "y": {
+          "maximum": 288,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "w": {
+          "maximum": 288,
+          "minimum": 20,
+          "type": "integer"
+        },
+        "h": {
+          "maximum": 144,
+          "minimum": 20,
+          "type": "integer"
+        },
+        "z": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
+          "const": "image",
+          "default": "image",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "name",
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "title": "ImageBox",
+      "type": "object"
+    },
+    "Imu": {
+      "description": "Raw SDK imuData. Units/axes are undocumented \u2014 Part 3 owns characterising them.",
+      "properties": {
+        "type": {
+          "const": "imu",
+          "default": "imu",
+          "type": "string"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "z": {
+          "type": "number"
+        },
+        "t": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "x",
+        "y",
+        "z",
+        "t"
+      ],
+      "title": "Imu",
+      "type": "object"
+    },
+    "Input": {
+      "properties": {
+        "type": {
+          "const": "input",
+          "default": "input",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "tap",
+            "double_tap",
+            "scroll_up",
+            "scroll_down",
+            "long_press",
+            "long_press_release",
+            "list_select"
+          ],
+          "type": "string"
+        },
+        "source": {
+          "default": "unknown",
+          "enum": [
+            "right",
+            "left",
+            "ring",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "index": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "t": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "kind",
+        "t"
+      ],
+      "title": "Input",
+      "type": "object"
+    },
+    "Lifecycle": {
+      "properties": {
+        "type": {
+          "const": "lifecycle",
+          "default": "lifecycle",
+          "type": "string"
+        },
+        "event": {
+          "enum": [
+            "foreground",
+            "background",
+            "abnormal_exit",
+            "system_exit"
+          ],
+          "type": "string"
+        },
+        "t": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "event",
+        "t"
+      ],
+      "title": "Lifecycle",
+      "type": "object"
+    },
+    "ListBox": {
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "name": {
+          "maxLength": 16,
+          "type": "string"
+        },
+        "x": {
+          "maximum": 576,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "y": {
+          "maximum": 288,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "w": {
+          "maximum": 576,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "h": {
+          "maximum": 288,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "z": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
+          "const": "list",
+          "default": "list",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+        },
+        "capture": {
+          "default": false,
+          "type": "boolean"
+        },
+        "border": {
+          "default": 0,
+          "maximum": 5,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "border_color": {
+          "default": 15,
+          "maximum": 15,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "radius": {
+          "default": 0,
+          "maximum": 10,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "padding": {
+          "default": 0,
+          "maximum": 32,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "name",
+        "x",
+        "y",
+        "w",
+        "h",
+        "items"
+      ],
+      "title": "ListBox",
+      "type": "object"
+    },
+    "Ping": {
+      "properties": {
+        "type": {
+          "const": "ping",
+          "default": "ping",
+          "type": "string"
+        },
+        "t": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "t"
+      ],
+      "title": "Ping",
+      "type": "object"
+    },
+    "Pong": {
+      "properties": {
+        "type": {
+          "const": "pong",
+          "default": "pong",
+          "type": "string"
+        },
+        "t": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "t"
+      ],
+      "title": "Pong",
+      "type": "object"
+    },
+    "SetImage": {
+      "description": "PNG (greyscale, exact container size) as base64. Client sends sequentially;\n~104 ms + ~3.9 ms/KB each, so <= ~9 updates/s total across all image boxes.",
+      "properties": {
+        "type": {
+          "const": "image",
+          "default": "image",
+          "type": "string"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "png_b64": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name",
+        "png_b64"
+      ],
+      "title": "SetImage",
+      "type": "object"
+    },
+    "SetText": {
+      "description": "In-place text update (textContainerUpgrade, ~83 ms, no flicker).",
+      "properties": {
+        "type": {
+          "const": "text",
+          "default": "text",
+          "type": "string"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "content": {
+          "maxLength": 2000,
+          "type": "string"
+        },
+        "brightness": {
+          "anyOf": [
+            {
+              "maximum": 4,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name",
+        "content"
+      ],
+      "title": "SetText",
+      "type": "object"
+    },
+    "ShowPage": {
+      "description": "Full layout. Client calls createStartUpPageContainer the first time, then\nrebuildPageContainer (~165 ms, may flicker). Use sparingly.",
+      "properties": {
+        "type": {
+          "const": "page",
+          "default": "page",
+          "type": "string"
+        },
+        "boxes": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "image": "#/$defs/ImageBox",
+                "list": "#/$defs/ListBox",
+                "text": "#/$defs/TextBox"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextBox"
+              },
+              {
+                "$ref": "#/$defs/ListBox"
+              },
+              {
+                "$ref": "#/$defs/ImageBox"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "boxes"
+      ],
+      "title": "ShowPage",
+      "type": "object"
+    },
+    "TextBox": {
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "name": {
+          "maxLength": 16,
+          "type": "string"
+        },
+        "x": {
+          "maximum": 576,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "y": {
+          "maximum": 288,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "w": {
+          "maximum": 576,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "h": {
+          "maximum": 288,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "z": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
+          "const": "text",
+          "default": "text",
+          "type": "string"
+        },
+        "content": {
+          "default": "",
+          "maxLength": 1000,
+          "type": "string"
+        },
+        "capture": {
+          "default": false,
+          "type": "boolean"
+        },
+        "border": {
+          "default": 0,
+          "maximum": 5,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "border_color": {
+          "default": 15,
+          "maximum": 15,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "radius": {
+          "default": 0,
+          "maximum": 10,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "padding": {
+          "default": 0,
+          "maximum": 32,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "brightness": {
+          "anyOf": [
+            {
+              "maximum": 4,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "name",
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "title": "TextBox",
+      "type": "object"
+    }
+  },
+  "description": "Wrapper so one schema file holds every wire message.",
+  "properties": {
+    "server": {
+      "discriminator": {
+        "mapping": {
+          "control": "#/$defs/Control",
+          "image": "#/$defs/SetImage",
+          "page": "#/$defs/ShowPage",
+          "pong": "#/$defs/Pong",
+          "text": "#/$defs/SetText"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ShowPage"
+        },
+        {
+          "$ref": "#/$defs/SetText"
+        },
+        {
+          "$ref": "#/$defs/SetImage"
+        },
+        {
+          "$ref": "#/$defs/Control"
+        },
+        {
+          "$ref": "#/$defs/Pong"
+        }
+      ]
+    },
+    "client": {
+      "discriminator": {
+        "mapping": {
+          "audio_end": "#/$defs/AudioEnd",
+          "audio_start": "#/$defs/AudioStart",
+          "hello": "#/$defs/Hello",
+          "imu": "#/$defs/Imu",
+          "input": "#/$defs/Input",
+          "lifecycle": "#/$defs/Lifecycle",
+          "ping": "#/$defs/Ping",
+          "status": "#/$defs/DeviceStatus"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Hello"
+        },
+        {
+          "$ref": "#/$defs/Input"
+        },
+        {
+          "$ref": "#/$defs/AudioStart"
+        },
+        {
+          "$ref": "#/$defs/AudioEnd"
+        },
+        {
+          "$ref": "#/$defs/Imu"
+        },
+        {
+          "$ref": "#/$defs/Lifecycle"
+        },
+        {
+          "$ref": "#/$defs/DeviceStatus"
+        },
+        {
+          "$ref": "#/$defs/Ping"
+        }
+      ]
+    },
+    "camera_hello": {
+      "$ref": "#/$defs/CameraHello"
+    }
+  },
+  "required": [
+    "server",
+    "client",
+    "camera_hello"
+  ],
+  "title": "Protocol",
+  "type": "object"
+}

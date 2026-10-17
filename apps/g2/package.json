@@ -1,0 +1,23 @@
+{
+  "name": "bluebook-g2",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "sim": "evenhub-simulator http://localhost:5173",
+    "qr": "evenhub qr --url http://$(ipconfig getifaddr en0):5173",
+    "pack": "pnpm build && evenhub pack app.json dist -o bluebook.ehpk"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "0.0.16"
+  },
+  "devDependencies": {
+    "@evenrealities/evenhub-cli": "0.1.14",
+    "@evenrealities/evenhub-simulator": "0.9.5",
+    "typescript": "5.9.3",
+    "vite": "7.1.12"
+  }
+}

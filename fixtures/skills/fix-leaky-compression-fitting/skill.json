@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "id": "fix-leaky-compression-fitting",
+  "title": "Fix a leaky sink supply fitting",
+  "summary": "Stop a drip at the compression nut where the sink supply line meets the shutoff valve. HAND-WRITTEN FIXTURE for Parts 2/3 development; not produced by the pipeline.",
+  "tags": ["plumbing", "sink", "fixture"],
+  "difficulty": "beginner",
+  "est_duration_s": 600,
+  "prerequisites": ["Access under the sink", "Adjustable wrench"],
+  "safety": [
+    {"text": "Do not over-tighten: a cracked ferrule or valve body leaks worse.", "severity": "caution", "step_ids": ["s4"], "provenance": "narrated"}
+  ],
+  "objects": [
+    {"id": "shutoff_valve", "name": "shutoff valve", "aliases": ["angle stop", "water valve"], "category": "fixture",
+     "visual_description": "Small chrome valve on the wall under the sink with an oval or round handle, supply line coming out of the top."},
+    {"id": "compression_nut", "name": "compression nut", "aliases": ["supply nut"], "category": "part",
+     "visual_description": "Hex nut on the valve outlet where the braided supply line attaches."},
+    {"id": "wrench", "name": "adjustable wrench", "category": "tool", "visual_description": "Silver adjustable wrench, ~20 cm."},
+    {"id": "bucket", "name": "bucket", "aliases": ["towel"], "category": "material", "visual_description": "Any small bucket or a folded towel."},
+    {"id": "faucet", "name": "faucet", "category": "fixture", "visual_description": "Sink faucet above the counter."}
+  ],
+  "steps": [
+    {"id": "s1", "index": 0, "title": "Turn off the water", "tooltip": "Turn the shutoff valve clockwise until it stops.",
+     "instruction": "Find the shutoff valve under the sink feeding the leaking line. Turn the handle clockwise (righty-tighty) until it stops. Quarter-turn valves: turn the handle so it is perpendicular to the pipe.",
+     "why": "Working on a pressurised fitting sprays water and can strip threads.",
+     "objects": [{"object_id": "shutoff_valve", "role": "target", "action": "turn clockwise until it stops"}],
+     "success_criteria": ["Valve handle turned fully clockwise or perpendicular to the pipe"],
+     "common_mistakes": ["Turning the hot valve when the cold line leaks"], "tips": ["Old valves can be stiff; use steady pressure, not a wrench on the handle"],
+     "narration": "First thing, shut the water off right here at the valve.", "t_start": 0, "t_end": 20, "provenance": "narrated"},
+    {"id": "s2", "index": 1, "title": "Relieve pressure", "tooltip": "Open the faucet to drain remaining pressure.",
+     "instruction": "Open the faucet above. A short trickle that stops confirms the valve is closed.",
+     "objects": [{"object_id": "faucet", "role": "target", "action": "open"}],
+     "success_criteria": ["Faucet open", "Water flow stops within a few seconds"], "t_start": 20, "t_end": 35, "provenance": "inferred", "confidence": 0.8},
+    {"id": "s3", "index": 2, "title": "Catch drips", "tooltip": "Put a bucket or towel under the fitting.",
+     "instruction": "Place a bucket or folded towel directly under the valve and supply nut.",
+     "objects": [{"object_id": "bucket", "role": "material"}, {"object_id": "compression_nut", "role": "context"}],
+     "success_criteria": ["Bucket or towel visible under the valve"], "optional": true, "t_start": 35, "t_end": 45, "provenance": "observed"},
+    {"id": "s4", "index": 3, "title": "Snug the nut", "tooltip": "Tighten the compression nut 1/4 turn with the wrench.",
+     "instruction": "Hold the valve body steady with one hand. Fit the wrench on the compression nut and tighten clockwise about a quarter turn. Do not crank it.",
+     "why": "Compression fittings seal by squeezing a brass ferrule; a small turn usually reseats it.",
+     "objects": [{"object_id": "compression_nut", "role": "target", "action": "tighten 1/4 turn clockwise"}, {"object_id": "wrench", "role": "tool"}],
+     "success_criteria": ["Wrench on the nut on the valve outlet"], "common_mistakes": ["Tightening the valve packing nut instead", "Over-tightening"],
+     "warnings": ["Stop after a quarter turn; more can crack the ferrule"], "narration": "Just a quarter turn, that's usually all it needs.",
+     "t_start": 45, "t_end": 80, "provenance": "narrated"},
+    {"id": "s5", "index": 4, "title": "Test", "tooltip": "Turn the valve back on slowly and check for drips.",
+     "instruction": "Open the shutoff valve counter-clockwise slowly. Close the faucet. Wipe the fitting dry and watch it for a minute. If it still drips, repeat step 4 with another 1/8 turn.",
+     "objects": [{"object_id": "shutoff_valve", "role": "target", "action": "turn counter-clockwise to open"}, {"object_id": "compression_nut", "role": "context"}],
+     "success_criteria": ["Fitting stays dry for 60 seconds"], "depends_on": ["s4"], "t_start": 80, "t_end": 120, "provenance": "narrated"}
+  ],
+  "faq": [
+    {"q": "Which way is closed?", "a": "Clockwise. On quarter-turn valves, handle across the pipe means closed.", "step_ids": ["s1"], "provenance": "inferred"},
+    {"q": "Still leaking after tightening?", "a": "The ferrule may be damaged; the supply line or ferrule needs replacing.", "step_ids": ["s4", "s5"], "provenance": "inferred"}
+  ],
+  "transcript": [
+    {"t0": 0, "t1": 6, "text": "First thing, shut the water off right here at the valve."},
+    {"t0": 50, "t1": 55, "text": "Just a quarter turn, that's usually all it needs."}
+  ],
+  "chunks": [
+    {"id": "c_s1", "kind": "step", "step_id": "s1", "text": "Turn off the water: turn the shutoff valve under the sink clockwise until it stops."},
+    {"id": "c_s4", "kind": "step", "step_id": "s4", "text": "Tighten the compression nut a quarter turn with an adjustable wrench while holding the valve."},
+    {"id": "c_faq1", "kind": "faq", "text": "Which way is closed? Clockwise; quarter-turn handle across the pipe is closed."},
+    {"id": "c_safety1", "kind": "safety", "step_id": "s4", "text": "Do not over-tighten the compression nut; it can crack the ferrule."}
+  ],
+  "embedding": null,
+  "source": {"videos": [], "created_at": "2026-10-17T00:00:00Z", "pipeline_version": "fixture", "models": {}}
+}

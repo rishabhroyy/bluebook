@@ -1,0 +1,20 @@
+{
+  "package_id": "com.rishabhroy.bluebook",
+  "edition": "202601",
+  "name": "bluebook",
+  "version": "0.1.0",
+  "min_sdk_version": "0.0.16",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Connects to your bluebook server to load skills and get step-by-step guidance.",
+      "whitelist": ["https://REPLACE-laptop.REPLACE-tailnet.ts.net"]
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Hold the touchpad to ask the tutor a question by voice."
+    }
+  ],
+  "supported_languages": ["en"]
+}

@@ -1,0 +1,16 @@
+[project]
+name = "bluebook-perception"
+version = "0.1.0"
+description = "Part 1: video+audio -> SkillPackage"
+requires-python = ">=3.12"
+dependencies = ["bluebook-core"]
+
+[project.scripts]
+bluebook-ingest = "bluebook_perception.cli:main"
+
+[tool.uv.sources]
+bluebook-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

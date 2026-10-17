@@ -1,0 +1,60 @@
+<!doctype html>
+<!--
+  bluebook scene camera. Open on the tripod iPhone in Safari:
+    https://<laptop>.<tailnet>.ts.net/camera?id=scene&fps=4&w=1280
+  getUserMedia needs a secure context, which is why the server is behind `tailscale serve` (HTTPS).
+  Streams JPEG frames to /ws/camera; the server publishes them as hub CameraFrame events.
+  Shared by Part 2 (scene checks) and Part 3 (grounding + glasses pose). Don't fork it per part.
+-->
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>bluebook camera</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; background: #000; color: #9f9; font: 14px ui-monospace, monospace; }
+    video { width: 100%; display: block; }
+    #s { position: fixed; top: 8px; left: 8px; background: #000a; padding: 4px 8px; }
+    button { font: inherit; padding: 12px 20px; margin: 16px; }
+  </style>
+</head>
+<body>
+  <div id="s">tap start</div>
+  <video id="v" playsinline muted></video>
+  <button id="go">start</button>
+  <script>
+    const q = new URLSearchParams(location.search)
+    const ID = q.get('id') || 'scene', FPS = +(q.get('fps') || 4), W = +(q.get('w') || 1280), QUALITY = +(q.get('q') || 0.7)
+    const v = document.getElementById('v'), s = document.getElementById('s')
+    const say = (t) => (s.textContent = `${ID} · ${t}`)
+
+    document.getElementById('go').onclick = async (e) => {
+      e.target.remove()
+      // Rear camera, fixed-ish settings; Part 3 calibrates intrinsics at this exact resolution.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false, video: { facingMode: 'environment', width: { ideal: W }, frameRate: { ideal: 30 } },
+      })
+      v.srcObject = stream
+      await v.play()
+      try { await navigator.wakeLock?.request('screen') } catch {}
+      const c = document.createElement('canvas'), ctx = c.getContext('2d')
+      c.width = v.videoWidth; c.height = v.videoHeight
+      let ws, sent = 0
+      const connect = () => {
+        ws = new WebSocket(`${location.origin.replace(/^http/, 'ws')}/ws/camera`)
+        ws.onopen = () => ws.send(JSON.stringify({ type: 'camera_hello', camera_id: ID, width: c.width, height: c.height, fps: FPS, device: navigator.userAgent }))
+        ws.onclose = () => { say('disconnected, retrying'); setTimeout(connect, 1000) }
+      }
+      connect()
+      setInterval(() => {
+        // Drop frames rather than queue them: consumers want the newest frame, not a backlog.
+        if (ws.readyState !== 1 || ws.bufferedAmount > 256 * 1024) return
+        ctx.drawImage(v, 0, 0)
+        c.toBlob((b) => b && ws.readyState === 1 && ws.send(b), 'image/jpeg', QUALITY)
+        say(`${c.width}x${c.height} @${FPS}fps · sent ${++sent}`)
+      }, 1000 / FPS)
+    }
+  </script>
+</body>
+</html>

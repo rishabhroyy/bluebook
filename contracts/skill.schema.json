@@ -1,0 +1,673 @@
+{
+  "$defs": {
+    "Box2D": {
+      "description": "Normalised [0,1] box in the image referenced by `media`. Origin top-left.",
+      "properties": {
+        "x0": {
+          "type": "number"
+        },
+        "y0": {
+          "type": "number"
+        },
+        "x1": {
+          "type": "number"
+        },
+        "y1": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "x0",
+        "y0",
+        "x1",
+        "y1"
+      ],
+      "title": "Box2D",
+      "type": "object"
+    },
+    "Chunk": {
+      "description": "Unit of retrieval. Row i of embeddings.npy embeds chunks[i].",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "step",
+            "transcript",
+            "faq",
+            "object",
+            "keyframe",
+            "safety",
+            "overview"
+          ],
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "step_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "t0": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "t1": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "media": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediaRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "text"
+      ],
+      "title": "Chunk",
+      "type": "object"
+    },
+    "EmbeddingInfo": {
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "dim": {
+          "type": "integer"
+        },
+        "file": {
+          "default": "embeddings.npy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model",
+        "dim"
+      ],
+      "title": "EmbeddingInfo",
+      "type": "object"
+    },
+    "MediaRef": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "t": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "video": {
+          "default": 0,
+          "type": "integer"
+        },
+        "caption": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "MediaRef",
+      "type": "object"
+    },
+    "ObjectAppearance": {
+      "properties": {
+        "media": {
+          "$ref": "#/$defs/MediaRef"
+        },
+        "box": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Box2D"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "media"
+      ],
+      "title": "ObjectAppearance",
+      "type": "object"
+    },
+    "ObjectRef": {
+      "description": "A physical thing that matters for the task. Part 3 uses `name`, `aliases`,\n`visual_description` and `appearances` as the detection prompt / exemplars.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "aliases": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "category": {
+          "default": "other",
+          "enum": [
+            "tool",
+            "material",
+            "part",
+            "fixture",
+            "safety_gear",
+            "other"
+          ],
+          "type": "string"
+        },
+        "visual_description": {
+          "default": "",
+          "type": "string"
+        },
+        "appearances": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectAppearance"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "ObjectRef",
+      "type": "object"
+    },
+    "QA": {
+      "properties": {
+        "q": {
+          "type": "string"
+        },
+        "a": {
+          "type": "string"
+        },
+        "step_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "provenance": {
+          "default": "inferred",
+          "enum": [
+            "observed",
+            "narrated",
+            "inferred"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "q",
+        "a"
+      ],
+      "title": "QA",
+      "type": "object"
+    },
+    "SafetyNote": {
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "severity": {
+          "default": "caution",
+          "enum": [
+            "info",
+            "caution",
+            "danger"
+          ],
+          "type": "string"
+        },
+        "step_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "provenance": {
+          "default": "observed",
+          "enum": [
+            "observed",
+            "narrated",
+            "inferred"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "SafetyNote",
+      "type": "object"
+    },
+    "Source": {
+      "properties": {
+        "videos": {
+          "items": {
+            "$ref": "#/$defs/SourceVideo"
+          },
+          "type": "array"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "pipeline_version": {
+          "type": "string"
+        },
+        "models": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "videos",
+        "created_at",
+        "pipeline_version"
+      ],
+      "title": "Source",
+      "type": "object"
+    },
+    "SourceVideo": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "duration_s": {
+          "type": "number"
+        },
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        },
+        "fps": {
+          "type": "number"
+        },
+        "has_audio": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "duration_s",
+        "width",
+        "height",
+        "fps",
+        "has_audio"
+      ],
+      "title": "SourceVideo",
+      "type": "object"
+    },
+    "Step": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "index": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        },
+        "tooltip": {
+          "maxLength": 120,
+          "type": "string"
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "why": {
+          "default": "",
+          "type": "string"
+        },
+        "substeps": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "objects": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/StepObject"
+          },
+          "type": "array"
+        },
+        "success_criteria": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "common_mistakes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tips": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "narration": {
+          "default": "",
+          "type": "string"
+        },
+        "t_start": {
+          "type": "number"
+        },
+        "t_end": {
+          "type": "number"
+        },
+        "video": {
+          "default": 0,
+          "type": "integer"
+        },
+        "keyframes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/MediaRef"
+          },
+          "type": "array"
+        },
+        "clip": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediaRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "depends_on": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "optional": {
+          "default": false,
+          "type": "boolean"
+        },
+        "est_duration_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "default": "observed",
+          "enum": [
+            "observed",
+            "narrated",
+            "inferred"
+          ],
+          "type": "string"
+        },
+        "confidence": {
+          "default": 1.0,
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "index",
+        "title",
+        "tooltip",
+        "instruction",
+        "t_start",
+        "t_end"
+      ],
+      "title": "Step",
+      "type": "object"
+    },
+    "StepObject": {
+      "properties": {
+        "object_id": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "target",
+            "tool",
+            "material",
+            "context"
+          ],
+          "type": "string"
+        },
+        "action": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "object_id",
+        "role"
+      ],
+      "title": "StepObject",
+      "type": "object"
+    },
+    "TranscriptSegment": {
+      "properties": {
+        "t0": {
+          "type": "number"
+        },
+        "t1": {
+          "type": "number"
+        },
+        "text": {
+          "type": "string"
+        },
+        "speaker": {
+          "default": "",
+          "type": "string"
+        },
+        "video": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "t0",
+        "t1",
+        "text"
+      ],
+      "title": "TranscriptSegment",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": "1.0",
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "tags": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "difficulty": {
+      "default": "beginner",
+      "enum": [
+        "beginner",
+        "intermediate",
+        "advanced"
+      ],
+      "type": "string"
+    },
+    "est_duration_s": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "prerequisites": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "safety": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SafetyNote"
+      },
+      "type": "array"
+    },
+    "objects": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ObjectRef"
+      },
+      "type": "array"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/Step"
+      },
+      "type": "array"
+    },
+    "faq": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/QA"
+      },
+      "type": "array"
+    },
+    "transcript": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/TranscriptSegment"
+      },
+      "type": "array"
+    },
+    "chunks": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Chunk"
+      },
+      "type": "array"
+    },
+    "embedding": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EmbeddingInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "source": {
+      "$ref": "#/$defs/Source"
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "summary",
+    "steps",
+    "source"
+  ],
+  "title": "SkillPackage",
+  "type": "object"
+}

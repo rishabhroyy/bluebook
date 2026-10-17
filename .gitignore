@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+data/
+node_modules/
+dist/
+*.ehpk
+.DS_Store
+graphify-out/
