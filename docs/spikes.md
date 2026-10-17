@@ -35,6 +35,15 @@ Also report the voice round trip from the server log lines `answered in N.NNs`, 
 2. Check whether the app connects. `pack-g2.sh` whitelists both `https://` and `wss://` for the laptop origin, so to answer the question repeat the test with a build whose whitelist only has the `https://` entry.
 3. With the lesson open on a step, lock the phone for five minutes, then unlock it. The same step must come back, which is an Even beta test requirement. Repeat with the Even app in the background for five minutes.
 
+## Simulator observations, 2026-10-17
+
+These came from the Even Hub simulator 0.9.5 driven through its automation port, so they only hint at what the hardware does and every row in the results table still needs real glasses.
+
+- Swipes on the step view reach the server as `scroll_down` and `scroll_up` with the blank full screen capture box, so S5 looks good in the simulator.
+- A tooltip line holds about 60 characters, so the 120 character `render.TIP_CHARS` budget fills two of the three lines the `tip` box has room for. If the hardware matches, raising it to about 170 cuts the number of pages to scroll.
+- The automation `long_press` action sends the press and the release 18 ms apart, so automated runs can't test push to talk. Holding the button in the simulator window by hand does.
+- Still open for hardware is whether a rebuilt page starts with empty image boxes. Until that is known, the controller resends black tiles after every full redraw of a step without a keyframe, which costs about 200 ms.
+
 ## Results
 
 | Spike | Date | Glasses firmware, app version | Result | Consequence |
