@@ -114,6 +114,10 @@ class TeachController(Controller):
     # ------------------------------------------------------------------ lifecycle
 
     async def on_connect(self, conn: GlassesConnection) -> None:
+        # Also runs when a pushed controller (P3 calibration, spike) pops: anything asked before the push
+        # is dropped, and its "thinking" note must not come back with the redraw.
+        self.note = self.heard = ""
+        self.question += 1
         if conn.state.get("screen") not in SCREENS:  # first connect of this device since server start
             conn.state.clear()
             conn.state.update(self._restore(conn.session))
@@ -191,13 +195,14 @@ class TeachController(Controller):
 
     async def _answer(self, conn: GlassesConnection, pcm: bytes, epoch: int, q: int, t0: float) -> None:
         s = conn.state
+        screen = s["screen"]  # what the question was asked on; s["screen"] may change while we wait
         try:
-            if s["screen"] == "library":
+            if screen == "library":
                 skills = [k for k in store.list_skills(self.skills_root) if k.id in s["library_ids"]]
                 pick = await tutor.pick_skill(skills, pcm)
             else:
                 pkg = self._pkg(conn)
-                step = pkg.steps[s["step"]] if s["screen"] == "step" else None
+                step = pkg.steps[s["step"]] if screen == "step" else None
                 extra = s["extra_substeps"].get(step.id, []) if step else []
                 reply = await tutor.ask(pkg, step and step.id, s["history"], extra, pcm, self._fresh_frame())
         except Exception as e:  # noqa: BLE001 — timeout, model/network error, bad JSON: say so, keep the lesson
@@ -210,10 +215,15 @@ class TeachController(Controller):
             log.info("session %s: dropped a stale answer", conn.session)
             return
         self.note = ""
-        if s["screen"] == "library":
-            await self._apply_pick(conn, pick)
-        else:
-            await self._apply_reply(conn, pkg, reply)
+        try:
+            if screen == "library":
+                await self._apply_pick(conn, pick)
+            else:
+                await self._apply_reply(conn, pkg, reply)
+        except (OSError, ValueError, IndexError, KeyError) as e:  # skill changed on disk meanwhile
+            log.warning("session %s: answer not applied: %r; redrawing", conn.session, e)
+            await self._render(conn)
+            return
         log.info("session %s: answered in %.2fs", conn.session, time.monotonic() - t0)
 
     async def _apply_pick(self, conn: GlassesConnection, pick: tutor.LibraryPick) -> None:
@@ -270,6 +280,7 @@ class TeachController(Controller):
             s["view"] += d
         elif s["answer"]:  # scrolled past either end of an answer: dismiss it
             s["answer"], s["view"] = [], 0
+            self.heard = ""
         else:
             return
         await self._refresh(conn)
@@ -314,7 +325,11 @@ class TeachController(Controller):
         except (OSError, ValueError, IndexError) as e:  # skill deleted/re-ingested/broken under us
             log.warning("session %s: %s; back to library", conn.session, e)
             s.update(screen="library", skill_id=None, step=0, view=0, answer=[])
+            self.epoch += 1  # in-flight answers/scene checks were for the old screen
+            self.note = self.heard = ""
             await self._render_library(conn)
+            self._save(conn)
+            self._publish(conn)  # Part 3 must stop highlighting the vanished step
 
     async def _render_library(self, conn: GlassesConnection) -> None:
         skills = store.list_skills(self.skills_root)[:20]  # native list holds 20 items
@@ -439,6 +454,7 @@ class TeachController(Controller):
         if r.issue and confident and known and not s["answer"]:  # don't stomp an answer being read
             self.flagged.add(m)
             s["answer"], s["view"] = render.answer_pages([f"Check: {r.issue}"]), 0
+            self.heard = ""  # this page isn't the answer to the last question
             changed = True
         if changed:
             await self._refresh(conn)
@@ -484,7 +500,11 @@ class TeachController(Controller):
         f = self._session_file(session)
         try:
             saved = json.loads(f.read_text()) if f and f.is_file() else {}
-            if saved.get("screen") not in ("overview", "step", "done") or not saved.get("skill_id"):
+            if (
+                not isinstance(saved, dict)  # hand-edited or corrupt file
+                or saved.get("screen") not in ("overview", "step", "done")
+                or not saved.get("skill_id")
+            ):
                 return state
             pkg = store.load(saved["skill_id"], self.skills_root)
         except (OSError, ValueError) as e:

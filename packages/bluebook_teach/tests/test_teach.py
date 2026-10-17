@@ -350,6 +350,50 @@ async def test_pushed_controller_owns_the_screen(make, replies):
     assert len(conn.ws.sent) == n
 
 
+async def test_no_thinking_left_after_a_push_and_pop(make, replies):
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    gate = asyncio.Event()
+    replies.extend([gate, TutorReply(pages=["late"])])
+    await say(ctrl, conn, settle_after=False)
+    await conn.push(SpikeController())
+    gate.set()
+    await settle(ctrl)
+    await conn.pop()
+    assert status(conn).startswith("1/5 | Turn off the water") and tip(conn).startswith("Turn the shutoff")
+
+
+async def test_skill_deleted_while_answering(make, replies, skills):
+    ctrl, conn = make(root=skills)
+    await to_step(ctrl, conn)
+    gate = asyncio.Event()
+    replies.extend([gate, TutorReply(action="next", pages=["x"])])
+    await say(ctrl, conn, settle_after=False)
+    await asyncio.sleep(0)
+    store.delete(SKILL, skills)
+    await press(ctrl, conn, "tap")  # falls back to the library and tells Part 3 the lesson ended
+    assert conn.state["screen"] == "library" and hub.last(StepChanged, conn.session).step_id is None
+    gate.set()
+    await settle(ctrl)
+    assert conn.state["screen"] == "library"
+
+
+async def test_skill_deleted_between_model_call_and_apply(make, replies, skills, monkeypatch):
+    ctrl, conn = make(root=skills)
+    await to_step(ctrl, conn)
+    replies.append(TutorReply(action="next", pages=["x"]))
+    real_ask = tutor.ask
+
+    async def ask_then_delete(*a, **kw):
+        r = await real_ask(*a, **kw)
+        store.delete(SKILL, skills)
+        return r
+
+    monkeypatch.setattr(tutor, "ask", ask_then_delete)
+    await say(ctrl, conn)
+    assert conn.state["screen"] == "library" and THINKING not in json.dumps(conn.ws.sent[-1])
+
+
 async def test_library_voice_pick(make, replies):
     ctrl, conn = make()
     await ctrl.on_connect(conn)
@@ -513,6 +557,19 @@ async def test_scene_flags_a_known_mistake_once(make, scene):
     assert tip(conn) == "Turn the shutoff valve clockwise until it stops."
 
 
+async def test_scene_issue_after_a_dismissed_answer_has_no_old_transcript(make, scene, replies):
+    queue, _calls, t = scene
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    replies.append(TutorReply(transcript="which way?", pages=["Clockwise."]))
+    await say(ctrl, conn)
+    await press(ctrl, conn, "scroll_down")  # dismiss the one-page answer
+    queue.append(SceneCheck(confidence=0.9, mistake=1, issue="Wrong valve."))
+    ctrl.last_check = 0
+    await ctrl._scene_tick(conn, now=t)
+    assert tip(conn) == "Check: Wrong valve." and "which way" not in status(conn)
+
+
 async def test_scene_skips_stale_frames_and_other_screens(make, scene):
     _queue, calls, t = scene
     ctrl, conn = make()
@@ -593,6 +650,16 @@ async def test_reingested_skill_with_new_step_ids_restarts_at_overview(make, ski
     ctrl2, conn2 = make(root=skills, session="sn-reingest")
     await ctrl2.on_connect(conn2)
     assert conn2.state["screen"] == "overview"
+
+
+@pytest.mark.parametrize("content", ["[]", "not json", '{"screen": "step"}', '{"screen": 3, "skill_id": 1}'])
+async def test_corrupt_session_file_starts_at_the_library(make, tmp_path, content):
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "sessions" / "sn-corrupt.json").write_text(content)
+    glasses._states.pop("sn-corrupt", None)
+    ctrl, conn = make(session="sn-corrupt")
+    await ctrl.on_connect(conn)
+    assert conn.state["screen"] == "library" and box(last_page(conn), "list")["items"]
 
 
 async def test_anonymous_sessions_are_not_persisted(make, tmp_path):
