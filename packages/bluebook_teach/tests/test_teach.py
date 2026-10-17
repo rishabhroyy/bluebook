@@ -17,6 +17,7 @@ from bluebook_core.protocol import CameraFrame, Hello, Input, StepChanged
 from bluebook_core.skill import MediaRef, SafetyNote
 from bluebook_teach import render, tutor
 from bluebook_teach.controller import FAILED, LISTENING, LOOKS_DONE, THINKING, TeachController
+from bluebook_teach.spike import SpikeController
 from bluebook_teach.tutor import LibraryPick, SceneCheck, TutorReply
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -644,6 +645,40 @@ def test_teach_controller_through_the_websocket(monkeypatch, tmp_path):
         page = json.loads(ws.receive_text())
         assert box(page, "tip")["content"].startswith("Turn the shutoff valve")
         assert c.get("/teach/sessions").json()  # debug route shows the live session
+
+
+async def test_spike_pages_then_back_to_the_same_step(make):
+    ctrl, conn = make()
+    await to_step(ctrl, conn, 2)
+    await conn.push(SpikeController())
+    spike = conn.controller
+    assert box(last_page(conn), "tip")["content"].startswith("S5 glyphs: ● ★")  # deliberately unsanitized
+    await spike.on_input(conn, Input(kind="scroll_down", source="right", container="bg", t=0))
+    assert status(conn) == "s5 #1 scroll_down src=right box=bg"
+
+    await spike.on_input(conn, Input(kind="double_tap", t=0))  # -> S1 occlusion page with both stripe images
+    assert {b["name"] for b in last_page(conn)["boxes"]} >= {"img_l", "img_r", "txt"}
+    assert [m["name"] for m in conn.ws.sent[-3:-1]] == ["img_l", "img_r"]
+    await spike.on_input(conn, Input(kind="double_tap", t=0))  # -> S6
+    await spike.on_input(conn, Input(kind="tap", t=0))
+    assert tip(conn) == "TAP 4"
+
+    await spike.on_input(conn, Input(kind="double_tap", t=0))  # last page: pop back to teaching
+    assert conn.controller is ctrl and tip(conn) == "Put a bucket or towel under the fitting."
+    assert sum(t.get_name() == "scene" for t in ctrl._tasks) == 1  # redraw didn't start a second loop
+
+
+def test_spike_route(monkeypatch, tmp_path):
+    from bluebook_core.server import app
+
+    monkeypatch.setattr(glasses, "_factory", lambda: TeachController(FIXTURES, tmp_path))
+    sn = f"ws-{uuid4().hex[:6]}"
+    with TestClient(app) as c, c.websocket_connect("/ws/glasses") as ws:
+        ws.send_text(Hello(device={"sn": sn}).model_dump_json())
+        ws.receive_text()
+        assert c.post("/teach/spike/nobody").status_code == 404
+        assert c.post(f"/teach/spike/{sn}").json() == {"ok": True}
+        assert box(json.loads(ws.receive_text()), "tip")["content"].startswith("S5 glyphs")
 
 
 def test_layout_names_match_core_contract():
