@@ -1,7 +1,7 @@
 # AGENTS.md — rules for every agent working in this repo
 
 bluebook teaches hands-on tasks on Even Realities G2 glasses. Read `docs/DESIGN.md` first, then your
-brief in `workstreams/`, then `docs/INTEGRATION.md`.
+brief in `workstreams/`, then `docs/INTEGRATION.md`, then the "Run it on your own laptop" section of `README.md`.
 
 ## Which part am I?
 
@@ -35,8 +35,25 @@ uv run ruff check . && uv run ruff format --check .
 ./scripts/dev.sh [--sim]                  # everything on this laptop: server + glasses app + QR (+ simulator)
 uv run bluebook-server                    # just the server, on 127.0.0.1:8787
 uv run python scripts/gen_contracts.py    # after any protocol/skill model change (main only)
-cd apps/g2 && pnpm install && pnpm dev    # glasses app (pnpm); `pnpm sim` simulator, `pnpm qr` sideload
+cd apps/g2 && pnpm dev                    # glasses app only (dev.sh does this); `pnpm sim` simulator
 ```
+
+## Running and testing (every laptop is independent)
+
+- Each developer runs a **full private copy** on their own laptop with `./scripts/dev.sh`: their own
+  server, `.env` (own `GEMINI_API_KEY`), `data/skills/`, and tailnet hostname. Never assume another
+  person's laptop, server, URL, or data exists. Never hard-code a hostname, IP, or `ts.net` address.
+- `.env`, `data/`, `apps/g2/app.local.json`, and `*.ehpk` are per-laptop and gitignored. Don't commit
+  them, and don't put a real origin into `apps/g2/app.json` (it keeps the `REPLACE` placeholder;
+  `scripts/pack-g2.sh` fills it in per laptop).
+- Order of preference for checking your work: (1) `uv run pytest` with fakes, (2) the running server
+  with the simulator (`./scripts/dev.sh --sim`; no glasses needed), (3) real glasses, which need a
+  human to scan the QR code. Ask the human for (3); don't block on it.
+- Scene camera without a phone: the laptop webcam at `http://localhost:8787/camera?id=scene`.
+- Need another part's output (e.g. a real skill from Part 1)? Use `fixtures/skills/`, or ask the human
+  to copy a `data/skills/<id>/` folder over. Don't add network calls to someone else's machine.
+- If you change how the system is started or configured, update `scripts/dev.sh`, the README section,
+  and this file in the same PR to `main`.
 
 ## Conventions
 

@@ -82,7 +82,8 @@ product logic there), other parts.
 ## Milestones
 
 1. **M1:** spikes S1/S4/S5/S6 on real glasses through `EchoController`, which is already in core. Run the
-   app: `cd apps/g2 && pnpm dev`, `pnpm qr`, then scan in the Even app.
+   everything: `./scripts/dev.sh`, then the human scans the QR in the Even app. Before hardware, use
+   `./scripts/dev.sh --sim`.
 2. **M2:** library → overview → steps with tap/double-tap/scroll on the fixture skill. Publish `StepChanged`.
 3. **M3:** voice Q&A with `TutorReply` actions, plus session persistence.
 4. **M4:** keyframes in the image band, and scene checks with the `apps/camera` page.

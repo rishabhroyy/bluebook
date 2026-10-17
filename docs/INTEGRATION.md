@@ -59,9 +59,9 @@ Before each merge: rebase on main, run the full test suite, then run the smoke c
 
 ## End-to-end smoke checklist (after each merge)
 
-- [ ] `uv run bluebook-server` starts; `/health` lists mounted parts
-- [ ] `tailscale serve --bg 8787`; `https://<host>.ts.net/health` loads on the phone
-- [ ] G2 app connects (sideload via `pnpm qr`); library lists all skills in `data/skills/`
+- [ ] `./scripts/dev.sh` starts cleanly on a **fresh clone on a second laptop** (proves no one else's setup is needed)
+- [ ] `/health` lists mounted parts; the printed `https://<host>.ts.net/health` loads on the phone
+- [ ] G2 app connects (scan the printed QR, or `--sim`); library lists all skills in `data/skills/`
 - [ ] Fixture skill: overview → all steps → done; double-tap backs out to exit dialog
 - [ ] Hold-to-ask returns an answer in < 3 s; "go back a step" moves back
 - [ ] Phone locked 5 min → unlock → same step shown
