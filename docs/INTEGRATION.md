@@ -72,9 +72,9 @@ Before each merge: rebase on main, run the full test suite, then run the smoke c
 ## Demo-day runbook
 
 ```bash
-cp .env.example .env               # set GEMINI_API_KEY; put your ts.net origin in apps/g2/app.json
-uv sync && uv run bluebook-server  # laptop
-tailscale serve --bg 8787          # https://<host>.<tailnet>.ts.net
-cd apps/g2 && pnpm dev && pnpm qr  # scan with Even Realities app (phone on tailnet)
-# tripod phone: Safari → https://<host>.<tailnet>.ts.net/camera?id=scene
+./scripts/dev.sh                   # on the demo laptop; scan the printed QR in the Even Realities app
+# tripod phone: Safari → the printed https://<host>.<tailnet>.ts.net/camera?id=scene
+# no dev server on the phone? ./scripts/pack-g2.sh and install the .ehpk as a private build
 ```
+
+Every developer can run this on their own laptop at any time. See README §Run it on your own laptop.

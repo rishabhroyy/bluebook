@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "sim": "evenhub-simulator http://localhost:5173",
     "qr": "evenhub qr --url http://$(ipconfig getifaddr en0):5173",
-    "pack": "pnpm build && evenhub pack app.json dist -o bluebook.ehpk"
+    "pack": "../../scripts/pack-g2.sh"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "0.0.16"

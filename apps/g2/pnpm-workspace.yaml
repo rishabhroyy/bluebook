@@ -1,0 +1,3 @@
+# esbuild (via vite) needs its install script to fetch the platform binary.
+allowBuilds:
+  esbuild: true

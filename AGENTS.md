@@ -32,7 +32,8 @@ change it on a part branch. If you need a change there, stop and make a separate
 uv sync                                   # Python workspace (uv; Python ≥3.12)
 uv run pytest                             # all tests incl. core contract tests — must stay green
 uv run ruff check . && uv run ruff format --check .
-uv run bluebook-server                    # dev server on 127.0.0.1:8787
+./scripts/dev.sh [--sim]                  # everything on this laptop: server + glasses app + QR (+ simulator)
+uv run bluebook-server                    # just the server, on 127.0.0.1:8787
 uv run python scripts/gen_contracts.py    # after any protocol/skill model change (main only)
 cd apps/g2 && pnpm install && pnpm dev    # glasses app (pnpm); `pnpm sim` simulator, `pnpm qr` sideload
 ```
