@@ -226,7 +226,8 @@ async def test_question_answer_pages_then_back_to_step(make, replies):
     ctrl, conn = make()
     await to_step(ctrl, conn)
     replies.append(TutorReply(transcript="which way is closed?", pages=["Clockwise. " + "turn " * 30, "Done."]))
-    await press(ctrl, conn, "long_press")
+    sent = await press(ctrl, conn, "long_press")
+    assert [m["name"] for m in sent] == ["status"]  # the tip isn't resent for a status-only change
     assert status(conn) == f"1/5 | {LISTENING}"
     await ctrl.on_utterance(conn, PCM)
     assert status(conn) == f"1/5 | {THINKING}"

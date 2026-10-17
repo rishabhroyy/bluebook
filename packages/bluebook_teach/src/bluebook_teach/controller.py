@@ -135,11 +135,11 @@ class TeachController(Controller):
         try:
             if ev.kind == "long_press":  # push-to-talk: the client is already streaming PCM
                 self.note = LISTENING
-                await self._update(conn)
+                await self._update(conn, note_only=True)
             elif ev.kind == "long_press_release":
                 if self.note == LISTENING:  # no utterance arrived (too short / no audio); AudioEnd comes first
                     self.note = ""
-                    await self._update(conn)
+                    await self._update(conn, note_only=True)
             else:
                 await getattr(self, f"_input_{conn.state['screen']}")(conn, ev)
         except (OSError, ValueError, IndexError) as e:  # skill changed on disk mid-lesson: redraw (falls back)
@@ -185,7 +185,7 @@ class TeachController(Controller):
         """Runs on the receive loop: flip the status and hand the model call to a task."""
         self.note = THINKING if conn.state["screen"] != "done" else ""
         self.question += 1
-        await self._update(conn)
+        await self._update(conn, note_only=True)
         if self.note:
             self._spawn(self._answer(conn, pcm, self.epoch, self.question, time.monotonic()), name="answer")
 
@@ -204,7 +204,7 @@ class TeachController(Controller):
             log.warning("session %s: answer failed: %r", conn.session, e)
             if not self._stale(conn, epoch, q):
                 self.note = FAILED
-                await self._update(conn)
+                await self._update(conn, note_only=True)
             return
         if self._stale(conn, epoch, q):
             log.info("session %s: dropped a stale answer", conn.session)
@@ -329,10 +329,13 @@ class TeachController(Controller):
         await conn.text("tip", self._tip(conn))
         await conn.text("status", self._status(conn))
 
-    async def _update(self, conn: GlassesConnection) -> None:
-        """In-place update of whatever screen is up, e.g. for the listening/thinking note or an answer."""
+    async def _update(self, conn: GlassesConnection, note_only: bool = False) -> None:
+        """In-place update of whatever screen is up, e.g. for the listening/thinking note or an answer.
+        note_only: on a step only the status line changed, so skip resending the tip (~83 ms on glass)."""
         screen = conn.state["screen"]
-        if screen == "step":
+        if screen == "step" and note_only:
+            await conn.text("status", self._status(conn))
+        elif screen == "step":
             await self._refresh(conn)
         elif screen == "overview":
             await conn.text("msg", self._overview(conn))
