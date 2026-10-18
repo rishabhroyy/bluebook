@@ -45,7 +45,7 @@ def load(skill_id: str, root: Path | None = None) -> SkillPackage:
 
 @lru_cache(maxsize=32)
 def _load(d: Path, _mtime: int) -> SkillPackage:
-    pkg = SkillPackage.model_validate_json((d / "skill.json").read_text())
+    pkg = SkillPackage.model_validate_json((d / "skill.json").read_text(encoding="utf-8"))
     if pkg.schema_version.split(".")[0] != SCHEMA_VERSION.split(".")[0]:
         raise ValueError(f"{d}: schema {pkg.schema_version}, expected {SCHEMA_VERSION}")
     return pkg
@@ -62,7 +62,7 @@ def save(pkg: SkillPackage, embeddings: np.ndarray | None = None, root: Path | N
             raise ValueError(f"embeddings {embeddings.shape} don't match {len(pkg.chunks)} chunks / pkg.embedding")
         np.save(d / pkg.embedding.file, embeddings.astype(np.float32))
     tmp = d / "skill.json.tmp"
-    tmp.write_text(pkg.model_dump_json(indent=2))
+    tmp.write_text(pkg.model_dump_json(indent=2), encoding="utf-8")
     tmp.replace(d / "skill.json")
     return d
 
