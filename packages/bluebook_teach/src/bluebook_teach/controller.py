@@ -35,10 +35,15 @@ FRESH_S = 2.0  # a scene frame older than this is not shown to a model
 SCENE_EVERY_S = 4.0  # scene check cadence while a fresh frame exists
 SCENE_CONFIDENT = 0.7  # suggest "looks done" after 2 agreeing checks at this confidence
 
-# Push-to-talk feedback goes in the big "tip" area: the dim status line was easy to miss on glass.
-LISTENING = "● Listening... let go when you're done."
+# Asking on a step: swipe down opens the mic, tap (or another swipe down) sends. On G2 hardware apps only
+# ever receive the RELEASE of a long press (spike S5, 2026-10-17), so hold-to-talk can't start recording.
+# Feedback goes in the big "tip" area: the dim status line was easy to miss on glass.
+LISTENING = "● Listening... tap when you're done."
 THINKING = "Thinking..."
-FAILED = "Couldn't answer. Hold to ask again."
+FAILED = "Couldn't answer. Swipe down to ask again."
+NOT_HEARD = "Didn't hear anything. Swipe down to ask again."
+ASK_MAX_S = 20.0  # a forgotten open mic closes itself
+HEARD_GRACE_S = 5.0  # after closing the mic, how long to wait for the utterance before saying nothing was heard
 LOOKS_DONE = "★ looks done, tap"
 
 # teach_page's image band (img_l + img_r): a step keyframe goes here unless Part 3 owns it.
@@ -108,6 +113,10 @@ class TeachController(Controller):
         self.streak = 0  # consecutive confident "done" scene checks on this step
         self.flagged: set[int] = set()  # common mistakes already shown on this step
         self.last_check = 0.0
+        self.recording = False  # the server opened the mic (swipe to ask) and is waiting for the learner
+        self.asks = 0  # bumped per swipe-to-ask, so a stale auto-stop timer does nothing
+        self.drop_utterance = False  # mic was closed by navigation: ignore the audio it flushes
+        self._ask_timer: asyncio.Task | None = None
         self._band_key: str | None = None  # keyframe currently in the band ("" = black)
         self._scene_task: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
@@ -119,6 +128,7 @@ class TeachController(Controller):
         # is dropped, and its "thinking" note must not come back with the redraw.
         self.note = self.heard = ""
         self.question += 1
+        self.recording = self.drop_utterance = False  # a reconnected client starts with the mic closed
         if conn.state.get("screen") not in SCREENS:  # first connect of this device since server start
             conn.state.clear()
             conn.state.update(self._restore(conn.session))
@@ -137,6 +147,18 @@ class TeachController(Controller):
     # ---------------------------------------------------------------------- input
 
     async def on_input(self, conn: GlassesConnection, ev: Input) -> None:
+        log.info(
+            "session %s: input %s src=%s box=%s idx=%s on %s step=%s answer=%d note=%r",
+            conn.session,
+            ev.kind,
+            ev.source,
+            ev.container,
+            ev.index,
+            conn.state.get("screen"),
+            conn.state.get("step"),
+            len(conn.state.get("answer", [])),
+            self.note,
+        )  # fmt: skip  — one line per gesture: the hardware input contract is still unverified (spike S5)
         try:
             if ev.kind == "long_press":  # push-to-talk: the client is already streaming PCM
                 self.note = LISTENING
@@ -170,7 +192,13 @@ class TeachController(Controller):
 
     async def _input_step(self, conn: GlassesConnection, ev: Input) -> None:
         s = conn.state
-        if ev.kind == "tap" and s["answer"]:
+        if self.recording and ev.kind in ("tap", "scroll_down"):  # done talking: send the question
+            await self._stop_ask(conn)
+        elif ev.kind == "scroll_down":
+            await self._start_ask(conn)
+        elif ev.kind == "scroll_up":
+            await self._scroll(conn)
+        elif ev.kind == "tap" and s["answer"]:
             await self._dismiss(conn)
         elif ev.kind == "tap":
             if s["step"] + 1 < len(self._pkg(conn).steps):
@@ -179,8 +207,46 @@ class TeachController(Controller):
                 await self._go(conn, "done")
         elif ev.kind == "double_tap":
             await self._go(conn, "overview")
-        elif ev.kind in ("scroll_down", "scroll_up"):
-            await self._scroll(conn, 1 if ev.kind == "scroll_down" else -1)
+
+    async def _start_ask(self, conn: GlassesConnection) -> None:
+        self.recording, self.drop_utterance = True, False
+        self.asks += 1
+        self.note = LISTENING
+        await conn.control(mic=True)  # the client opens an utterance and streams PCM (apps/g2 main.ts)
+        await self._update(conn, note_only=True)
+        self._ask_timer = self._spawn(self._auto_stop(conn, self.asks), name="ask-timeout")
+
+    async def _stop_ask(self, conn: GlassesConnection) -> None:
+        if not self.recording:
+            return
+        self.recording = False
+        if self._ask_timer:
+            self._ask_timer.cancel()
+        self.note = THINKING
+        await conn.control(mic=False)  # the client sends audio_end; core then calls on_utterance
+        await self._update(conn, note_only=True)
+        self._spawn(self._expect_utterance(conn, self.question, self.epoch), name="ask-heard")
+
+    async def _cancel_ask(self, conn: GlassesConnection) -> None:
+        """Navigation while the mic is open: close it and ignore what it recorded."""
+        if self.recording:
+            self.recording, self.drop_utterance = False, True
+            if self._ask_timer:
+                self._ask_timer.cancel()
+            await conn.control(mic=False)
+
+    async def _auto_stop(self, conn: GlassesConnection, ask: int) -> None:
+        await asyncio.sleep(ASK_MAX_S)
+        self._ask_timer = None  # don't let _stop_ask cancel this task from inside itself
+        if self.recording and ask == self.asks and not self._stale(conn, self.epoch):
+            await self._stop_ask(conn)
+
+    async def _expect_utterance(self, conn: GlassesConnection, q: int, epoch: int) -> None:
+        """No audio reached the server (mic produced nothing): don't leave "Thinking..." up forever."""
+        await asyncio.sleep(HEARD_GRACE_S)
+        if self.note == THINKING and not self._stale(conn, epoch, q):
+            self.note = NOT_HEARD
+            await self._update(conn, note_only=True)
 
     async def _dismiss(self, conn: GlassesConnection) -> None:
         """First tap after an answer (or a camera warning) closes it and shows the instruction it covered;
@@ -199,6 +265,10 @@ class TeachController(Controller):
 
     async def on_utterance(self, conn: GlassesConnection, pcm: bytes) -> None:
         """Runs on the receive loop: flip the status and hand the model call to a task."""
+        log.info("session %s: utterance %.1fs of audio on %s", conn.session, len(pcm) / 32000, conn.state["screen"])
+        if self.drop_utterance:  # the mic was closed by navigation, not by the learner finishing
+            self.drop_utterance = False
+            return
         self.note = THINKING if conn.state["screen"] != "done" else ""
         self.question += 1
         await self._update(conn, note_only=True)
@@ -224,7 +294,7 @@ class TeachController(Controller):
                 await self._update(conn, note_only=True)
             return
         if self._stale(conn, epoch, q):
-            log.info("session %s: dropped a stale answer", conn.session)
+            log.info("session %s: dropped a stale answer (moved on, asked again, or reconnected)", conn.session)
             return
         self.note = ""
         try:
@@ -242,7 +312,7 @@ class TeachController(Controller):
         if pick.skill_id in conn.state["library_ids"]:
             await self._go(conn, "overview", skill_id=pick.skill_id)
         else:
-            self.note = render.sanitize(pick.reply or "No match. Hold to try again.")
+            self.note = render.sanitize(pick.reply or "No match. Try again.")
             await self._update(conn)
 
     async def _apply_reply(self, conn: GlassesConnection, pkg: SkillPackage, reply: tutor.TutorReply) -> None:
@@ -284,15 +354,18 @@ class TeachController(Controller):
             or glasses.sessions.get(conn.session, conn) is not conn
         )
 
-    async def _scroll(self, conn: GlassesConnection, d: int) -> None:
-        """Page through the answer (if one is showing), then back to the step's own pages."""
+    async def _scroll(self, conn: GlassesConnection) -> None:
+        """Swipe up: next page of the answer (closing it after the last), else next detail page, wrapping
+        back to the tooltip. One direction only, since swipe down asks."""
         s = conn.state
         n = len(self._pages(conn))
-        if 0 <= s["view"] + d < n:
-            s["view"] += d
-        elif s["answer"]:  # scrolled past either end of an answer: dismiss it
+        if s["view"] + 1 < n:
+            s["view"] += 1
+        elif s["answer"]:
             s["answer"], s["view"] = [], 0
             self.heard = ""
+        elif n > 1:
+            s["view"] = 0
         else:
             return
         await self._refresh(conn)
@@ -303,6 +376,7 @@ class TeachController(Controller):
         self, conn: GlassesConnection, screen: str, skill_id: str | None = None, step: int | None = None
     ) -> None:
         s = conn.state
+        await self._cancel_ask(conn)
         cheap = screen == "step" and s["screen"] == "step" and conn.page is not None
         s.update(screen=screen, view=0, answer=[])
         if skill_id is not None:

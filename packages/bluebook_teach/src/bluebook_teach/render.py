@@ -127,7 +127,7 @@ def status_line(pkg: SkillPackage, i: int, view: int, n_pages: int, note: str = 
 
 def overview_text(pkg: SkillPackage) -> str:
     """Built most important first, then cut on a line boundary, so truncation never drops safety."""
-    lines = [pkg.title, "Tap to start. Double tap for the library."]
+    lines = [pkg.title, "Tap to start. Double tap for the library.", "On a step, swipe down to ask, swipe up for more."]
     n = len(pkg.steps)
     lines.append(f"{n} steps, about {round(pkg.est_duration_s / 60)} min." if pkg.est_duration_s else f"{n} steps.")
     for note in sorted(pkg.safety, key=lambda s: SEVERITY_ORDER[s.severity]):

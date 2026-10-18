@@ -51,8 +51,8 @@ These came from the Even Hub simulator 0.9.5 driven through its automation port,
 | S1 image over text | | | | |
 | S4 whitelist for wss | | | | |
 | S4 phone locked 5 min | | | | |
-| S5 scroll on blank capture box | | | | |
-| S5 long press and release, temples and ring | | | | |
+| S5 scroll on blank capture box | 2026-10-17 | not recorded | Works. Swipes arrive as `scroll_up` and `scroll_down` from the `bg` box, with source `unknown`. | Step paging can stay on the blank capture box. |
+| S5 long press and release, temples and ring | 2026-10-17 | not recorded | Holding either temple sends only `long_press_release`, with source `left` or `right`. The `long_press` start never reached the app. The ring wasn't tested. | Hold to talk can't start recording. Asking moved to swipe down to open the mic and tap to send, with the server turning the mic on through `Control(mic)`. |
 | S5 glyphs that render | | | | |
 | S6 tap to visible, median | | | | |
 | S6 voice release to first page, p50 | | | | |
