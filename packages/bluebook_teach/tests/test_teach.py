@@ -142,25 +142,18 @@ async def test_full_walk_library_to_done_and_back_out(make):
     assert sent == [{"type": "control", "exit": True}]
 
 
-async def test_scroll_pages_through_step_detail(make):
+async def test_step_has_no_detail_subpages(make):
     ctrl, conn = make()
     await to_step(ctrl, conn)
-    pages = render.detail_pages(store.load(SKILL, FIXTURES), store.load(SKILL, FIXTURES).steps[0])
-    assert len(pages) > 2 and all(len(p) <= render.TIP_CHARS for p in pages)
-
-    assert await press(ctrl, conn, "scroll_up") == []  # already on the tooltip
-    await press(ctrl, conn, "scroll_down")
-    assert tip(conn) == pages[1] and status(conn).endswith(f"2/{len(pages)}")
-    for _ in range(len(pages) + 3):
-        await press(ctrl, conn, "scroll_down")
-    assert tip(conn) == pages[-1]
-    await press(ctrl, conn, "tap")  # next step resets to its tooltip
-    assert tip(conn) == "Open the faucet to drain remaining pressure."
+    assert await press(ctrl, conn, "scroll_down") == [] and await press(ctrl, conn, "scroll_up") == []
+    assert tip(conn) == "Turn the shutoff valve clockwise until it stops." and "pg" not in status(conn)
 
 
-async def test_duplicate_swipe_is_ignored(make, monkeypatch):
+async def test_duplicate_swipe_is_ignored(make, replies, monkeypatch):
     ctrl, conn = make()
     await to_step(ctrl, conn)
+    replies.append(TutorReply(pages=["One.", "Two.", "Three."]))
+    await say(ctrl, conn)
     monkeypatch.setattr(teach, "SWIPE_DEBOUNCE_S", 0.3)
     await press(ctrl, conn, "scroll_down")
     assert await press(ctrl, conn, "scroll_down") == []  # the hardware's double delivery of one swipe
@@ -317,8 +310,6 @@ async def test_add_substeps_extends_the_step(make, replies):
     await say(ctrl, conn)
     assert tip(conn) == "Substep 1/2. Find the cold valve, on the right."
     assert conn.state["extra_substeps"] == {"s1": ["Find the cold valve, on the right.", "Grip the oval handle."]}
-    pages = render.detail_pages(store.load(SKILL, FIXTURES), store.load(SKILL, FIXTURES).steps[0], ["x"])
-    assert any(p.startswith("Substep 1/1. x") for p in pages)
 
 
 async def test_question_on_overview(make, replies):
@@ -560,7 +551,7 @@ async def test_scene_suggests_after_two_agreeing_checks_and_never_advances(make,
     assert calls == ["s1"] and LOOKS_DONE not in status(conn)
     ctrl.last_check -= 4  # pretend 4 s passed without making the frame stale
     await ctrl._scene_tick(conn, now=t)
-    assert status(conn) == f"1/5 | {LOOKS_DONE} | pg 1/5"
+    assert status(conn) == f"1/5 | {LOOKS_DONE}"
     assert conn.state["step"] == 0
     await press(ctrl, conn, "tap")  # accepting the suggestion is just the normal tap
     assert conn.state["step"] == 1 and LOOKS_DONE not in status(conn)
@@ -668,10 +659,9 @@ async def test_lesson_survives_server_restart(make):
 async def test_reconnect_resumes_from_memory(make):
     ctrl, conn = make()
     await to_step(ctrl, conn, 1)
-    await press(ctrl, conn, "scroll_down")
     ctrl2, conn2 = make(session=conn.session)  # same glasses serial, new socket (e.g. Android WebView killed)
     await ctrl2.on_connect(conn2)
-    assert conn2.state["step"] == 1 and conn2.state["view"] == 1
+    assert conn2.state["step"] == 1
 
 
 async def test_deleted_skill_falls_back_to_library(make, skills):
