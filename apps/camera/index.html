@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
   bluebook scene camera. Open on the tripod iPhone in Safari:
-    https://<laptop>.<tailnet>.ts.net/camera?id=scene&fps=4&w=1280
+    https://<laptop>.<tailnet>.ts.net/camera?id=scene&fps=4&w=1280   (pick back or front camera on the page)
   getUserMedia needs a secure context, which is why the server is behind `tailscale serve` (HTTPS).
   Streams JPEG frames to /ws/camera; the server publishes them as hub CameraFrame events.
   Shared by Part 2 (scene checks) and Part 3 (grounding + glasses pose). Don't fork it per part.
@@ -15,6 +15,7 @@
     :root { color-scheme: dark; }
     body { margin: 0; background: #000; color: #9f9; font: 14px ui-monospace, monospace; }
     video { width: 100%; display: block; }
+    video.mirror { transform: scaleX(-1); } /* preview only; frames sent are unmirrored */
     #s { position: fixed; top: 8px; left: 8px; background: #000a; padding: 4px 8px; }
     button { font: inherit; padding: 12px 20px; margin: 16px; }
   </style>
@@ -22,7 +23,7 @@
 <body>
   <div id="s">tap start</div>
   <video id="v" playsinline muted></video>
-  <button id="go">start</button>
+  <div id="go"><button data-facing="environment">start · back camera</button><button data-facing="user">start · front camera</button></div>
   <script>
     const q = new URLSearchParams(location.search)
     const ID = q.get('id') || 'scene', FPS = +(q.get('fps') || 4), W = +(q.get('w') || 1280), QUALITY = +(q.get('q') || 0.7)
@@ -30,16 +31,20 @@
     const say = (t) => (s.textContent = `${ID} · ${t}`)
 
     document.getElementById('go').onclick = async (e) => {
-      e.target.remove()
-      // Rear camera, fixed-ish settings; Part 3 calibrates intrinsics at this exact resolution.
+      const facing = e.target.dataset.facing
+      if (!facing) return
+      e.currentTarget.remove()
+      // Fixed-ish settings; Part 3 calibrates intrinsics at this exact resolution.
+      // Front camera lets the screen face you (handy when the phone must see your face).
       let stream
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          audio: false, video: { facingMode: 'environment', width: { ideal: W }, frameRate: { ideal: 30 } },
+          audio: false, video: { facingMode: facing, width: { ideal: W }, frameRate: { ideal: 30 } },
         })
       } catch (err) {
         return say(`camera error: ${err.name} — needs https (tailscale serve) and camera permission`)
       }
+      v.classList.toggle('mirror', facing === 'user')
       v.srcObject = stream
       await v.play()
       try { await navigator.wakeLock?.request('screen') } catch {}
