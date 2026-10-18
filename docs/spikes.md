@@ -51,8 +51,8 @@ These came from the Even Hub simulator 0.9.5 driven through its automation port,
 | S1 image over text | | | | |
 | S4 whitelist for wss | | | | |
 | S4 phone locked 5 min | | | | |
-| S5 scroll on blank capture box | 2026-10-17 | not recorded | Works. Swipes arrive as `scroll_up` and `scroll_down` from the `bg` box, with source `unknown`. | Step paging can stay on the blank capture box. |
-| S5 long press and release, temples and ring | 2026-10-17 | not recorded | Holding either temple sends only `long_press_release`, with source `left` or `right`. The `long_press` start never reached the app. The ring wasn't tested. | Hold to talk can't start recording. Asking moved to swipe down to open the mic and tap to send, with the server turning the mic on through `Control(mic)`. |
+| S5 scroll on blank capture box | 2026-10-17 | not recorded | Works. Swipes arrive as `scroll_up` and `scroll_down` from the `bg` box, with source `unknown`. One swipe sometimes arrives twice about 170 ms apart. | Step paging stays on the blank capture box, and repeats of the same swipe within 300 ms are ignored. |
+| S5 long press and release, temples and ring | 2026-10-17 | not recorded | At first only `long_press_release` reached the server, from both temples. The cause was the glasses app itself. It called `crypto.randomUUID`, which the Even WebView doesn't define on the plain http dev page, so handling the press crashed before it was sent. With that fixed, recording works, with a 5.0 s utterance answered in 4.4 s. The ring wasn't tested. | Hold to ask is back. Confirm the press now reaches the server on both temples. |
 | S5 glyphs that render | | | | |
 | S6 tap to visible, median | | | | |
 | S6 voice release to first page, p50 | | | | |

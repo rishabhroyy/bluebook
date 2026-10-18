@@ -17,7 +17,7 @@ from bluebook_core.protocol import CameraFrame, Hello, Input, StepChanged
 from bluebook_core.skill import MediaRef, SafetyNote
 from bluebook_teach import controller as teach
 from bluebook_teach import render, tutor
-from bluebook_teach.controller import FAILED, LISTENING, LOOKS_DONE, NOT_HEARD, THINKING, TeachController
+from bluebook_teach.controller import FAILED, LISTENING, LOOKS_DONE, THINKING, TeachController
 from bluebook_teach.spike import SpikeController
 from bluebook_teach.tutor import LibraryPick, SceneCheck, TutorReply
 from fastapi.testclient import TestClient
@@ -43,6 +43,7 @@ async def make(tmp_path, monkeypatch):
     made: list[TeachController] = []
 
     def _make(root: Path = FIXTURES, session: str | None = None, interactive: bool = False):
+        monkeypatch.setattr(teach, "SWIPE_DEBOUNCE_S", 0)  # tests swipe faster than any finger
         ctrl = TeachController(skills_root=root, sessions_dir=tmp_path / "sessions", interactive=interactive)
         made.append(ctrl)
         monkeypatch.setattr(glasses, "_factory", lambda: ctrl)
@@ -147,15 +148,25 @@ async def test_scroll_pages_through_step_detail(make):
     pages = render.detail_pages(store.load(SKILL, FIXTURES), store.load(SKILL, FIXTURES).steps[0])
     assert len(pages) > 2 and all(len(p) <= render.TIP_CHARS for p in pages)
 
-    await press(ctrl, conn, "scroll_up")  # swipe up = more detail (swipe down asks)
+    assert await press(ctrl, conn, "scroll_up") == []  # already on the tooltip
+    await press(ctrl, conn, "scroll_down")
     assert tip(conn) == pages[1] and status(conn).endswith(f"2/{len(pages)}")
-    for _ in range(len(pages) - 2):
-        await press(ctrl, conn, "scroll_up")
+    for _ in range(len(pages) + 3):
+        await press(ctrl, conn, "scroll_down")
     assert tip(conn) == pages[-1]
-    await press(ctrl, conn, "scroll_up")  # wraps back to the tooltip
-    assert tip(conn) == pages[0]
     await press(ctrl, conn, "tap")  # next step resets to its tooltip
     assert tip(conn) == "Open the faucet to drain remaining pressure."
+
+
+async def test_duplicate_swipe_is_ignored(make, monkeypatch):
+    ctrl, conn = make()
+    await to_step(ctrl, conn)
+    monkeypatch.setattr(teach, "SWIPE_DEBOUNCE_S", 0.3)
+    await press(ctrl, conn, "scroll_down")
+    assert await press(ctrl, conn, "scroll_down") == []  # the hardware's double delivery of one swipe
+    assert conn.state["view"] == 1
+    assert await press(ctrl, conn, "scroll_up") != []  # the other direction is a new gesture
+    assert conn.state["view"] == 0
 
 
 async def test_empty_library_still_exits(make, tmp_path):
@@ -211,8 +222,8 @@ def replies(monkeypatch):
 
 
 async def settle(ctrl):
-    """Wait for answer tasks (not the scene loop or the ask timers, which only sleep)."""
-    while pending := [t for t in ctrl._tasks if t.get_name() == "answer"]:
+    """Wait for answer tasks (not the scene loop, which lives as long as the connection)."""
+    while pending := [t for t in ctrl._tasks if t.get_name() != "scene"]:
         await asyncio.gather(*pending, return_exceptions=True)
 
 
@@ -237,11 +248,12 @@ async def test_question_answer_pages_then_back_to_step(make, replies):
     answer = conn.state["answer"]
     assert len(answer) == 3 and all(len(p) <= render.TIP_CHARS for p in answer)  # long page re-paginated
     assert tip(conn) == f'"which way is closed?"\n{answer[0]}'  # their words above the answer
-    await press(ctrl, conn, "scroll_up")
+    await press(ctrl, conn, "scroll_down")
     assert tip(conn) == f'"which way is closed?"\n{answer[1]}' and status(conn).endswith("pg 2/3")
+    await press(ctrl, conn, "scroll_up")
     assert replies.calls[0]["step_id"] == "s1"
-    for _ in range(2):
-        await press(ctrl, conn, "scroll_up")
+    for _ in range(3):
+        await press(ctrl, conn, "scroll_down")
     assert tip(conn) == "Turn the shutoff valve clockwise until it stops."  # scrolled off the end: dismissed
     assert conn.state["history"][-1]["q"] == "which way is closed?"
 
@@ -268,72 +280,12 @@ async def test_tutor_actions(make, replies, reply, start, want_screen, want_step
         assert tip(conn) == (render.answer_pages(reply.pages) or [tip(conn)])[0]
 
 
-async def test_swipe_down_asks_and_tap_sends(make, replies):
-    ctrl, conn = make()
-    await to_step(ctrl, conn)
-    sent = await press(ctrl, conn, "scroll_down")
-    assert sent[0] == {
-        "type": "control",
-        "mic": True,
-        "exit": False,
-    }  # the server opens the mic (apps/g2 starts an utterance)
-    assert tip(conn) == LISTENING and conn.state["step"] == 0
-    replies.append(TutorReply(transcript="which way?", pages=["Clockwise."]))
-    sent = await press(ctrl, conn, "tap")  # done talking: sends, does not advance
-    assert (
-        sent[0] == {"type": "control", "mic": False, "exit": False}
-        and tip(conn) == THINKING
-        and conn.state["step"] == 0
-    )
-    await ctrl.on_utterance(conn, PCM)  # what core does when the client's audio_end arrives
-    await settle(ctrl)
-    assert tip(conn) == '"which way?"\nClockwise.'
-
-
-async def test_second_swipe_down_also_sends(make, replies):
-    ctrl, conn = make()
-    await to_step(ctrl, conn)
-    await press(ctrl, conn, "scroll_down")
-    sent = await press(ctrl, conn, "scroll_down")
-    assert sent[0] == {"type": "control", "mic": False, "exit": False} and tip(conn) == THINKING
-
-
-async def test_open_mic_closes_itself(make, monkeypatch):
-    monkeypatch.setattr(teach, "ASK_MAX_S", 0.01)
-    ctrl, conn = make()
-    await to_step(ctrl, conn)
-    await press(ctrl, conn, "scroll_down")
-    await asyncio.sleep(0.05)
-    assert {"type": "control", "mic": False, "exit": False} in conn.ws.sent and not ctrl.recording
-
-
-async def test_no_audio_after_sending_says_so(make, monkeypatch):
-    monkeypatch.setattr(teach, "HEARD_GRACE_S", 0.01)
-    ctrl, conn = make()
-    await to_step(ctrl, conn)
-    await press(ctrl, conn, "scroll_down")
-    await press(ctrl, conn, "tap")  # but the client flushed no PCM, so core never calls on_utterance
-    await asyncio.sleep(0.05)
-    assert tip(conn) == NOT_HEARD
-
-
-async def test_navigating_with_the_mic_open_discards_the_recording(make, replies):
-    ctrl, conn = make()
-    await to_step(ctrl, conn)
-    await press(ctrl, conn, "scroll_down")
-    sent = await press(ctrl, conn, "double_tap")  # back to the overview mid-question
-    assert sent[0] == {"type": "control", "mic": False, "exit": False} and conn.state["screen"] == "overview"
-    await ctrl.on_utterance(conn, PCM)  # the audio the closed mic flushed
-    await settle(ctrl)
-    assert replies.calls == [] and conn.state["answer"] == []
-
-
 async def test_first_tap_closes_the_answer_second_tap_advances(make, replies):
     ctrl, conn = make()
     await to_step(ctrl, conn, 1)
     replies.append(TutorReply(transcript="why?", pages=["So it doesn't spray.", "More."]))
     await say(ctrl, conn)
-    await press(ctrl, conn, "scroll_up")  # reading page 2 of the answer
+    await press(ctrl, conn, "scroll_down")  # reading page 2 of the answer
     sent = await press(ctrl, conn, "tap")
     assert conn.state["step"] == 1 and conn.state["answer"] == []
     assert tip(conn) == "Open the faucet to drain remaining pressure." and status(conn).startswith("2/5 | Relieve")
@@ -641,7 +593,7 @@ async def test_scene_flags_a_known_mistake_once(make, scene):
     ctrl.last_check = 0
     await ctrl._scene_tick(conn, now=t)
     assert tip(conn) == "Check: That's the hot valve. Use the cold one."
-    await press(ctrl, conn, "scroll_up")  # dismiss
+    await press(ctrl, conn, "scroll_down")  # dismiss
     for _ in range(2):  # same mistake again, then a mistake number that isn't in the step: ignored
         ctrl.last_check = 0
         await ctrl._scene_tick(conn, now=t)
@@ -654,7 +606,7 @@ async def test_scene_issue_after_a_dismissed_answer_has_no_old_transcript(make, 
     await to_step(ctrl, conn)
     replies.append(TutorReply(transcript="which way?", pages=["Clockwise."]))
     await say(ctrl, conn)
-    await press(ctrl, conn, "scroll_up")  # dismiss the one-page answer
+    await press(ctrl, conn, "scroll_down")  # dismiss the one-page answer
     queue.append(SceneCheck(confidence=0.9, mistake=1, issue="Wrong valve."))
     ctrl.last_check = 0
     await ctrl._scene_tick(conn, now=t)
@@ -709,7 +661,7 @@ async def test_lesson_survives_server_restart(make):
 async def test_reconnect_resumes_from_memory(make):
     ctrl, conn = make()
     await to_step(ctrl, conn, 1)
-    await press(ctrl, conn, "scroll_up")
+    await press(ctrl, conn, "scroll_down")
     ctrl2, conn2 = make(session=conn.session)  # same glasses serial, new socket (e.g. Android WebView killed)
     await ctrl2.on_connect(conn2)
     assert conn2.state["step"] == 1 and conn2.state["view"] == 1
