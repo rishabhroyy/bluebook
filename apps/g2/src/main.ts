@@ -178,6 +178,8 @@ function onEvent(ev: EvenHubEvent) {
     [OsEventTypeList.LONG_PRESS_RELEASE_EVENT]: 'long_press_release',
   } as Record<number, Input['kind']>)[type]
   if (!kind) return
+  // Store rule: double-tap on the root page must open the system exit dialog, even with no server to ask.
+  if (kind === 'double_tap' && ws?.readyState !== WebSocket.OPEN) return void bridge.shutDownPageContainer(1)
   // Long press is push-to-talk on every screen (contract, see DESIGN §6.2).
   if (kind === 'long_press' && !talking) {
     talking = uid()
@@ -229,9 +231,19 @@ function connect() {
   ws.onmessage = (m) => void handle(JSON.parse(m.data as string) as ServerMsg).catch((e) => log(`handle: ${e}`))
   ws.onclose = () => {
     log(`closed, retry in ${backoff} ms`)
+    if (!startupTried) showOffline()
     setTimeout(connect, backoff)
     backoff = Math.min(backoff * 2, 10_000)
   }
+}
+
+// Store rule: never a black screen. Shown only until the server's first page arrives (rebuild replaces it).
+function showOffline() {
+  startupTried = true
+  const content = `bluebook can't reach its server\n${SERVER.replace(/^wss?:\/\/|\/ws\/glasses$/g, '')}\n\nRetrying. Double-tap to exit.`
+  void bridge.createStartUpPageContainer(new CreateStartUpPageContainer({ containerTotalNum: 1, textObject: [new TextContainerProperty({
+    xPosition: 0, yPosition: 0, width: 576, height: 288, containerID: 1, containerName: 'offline', isEventCapture: 1, paddingLength: 16, content,
+  })] }))
 }
 
 async function main() {

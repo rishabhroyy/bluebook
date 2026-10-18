@@ -4,6 +4,7 @@
     uv run bluebook bootstrap --yes --api-key KEY   # non-interactive (agents / CI)
     uv run bluebook server               # same as bluebook-server
     uv run bluebook whisper              # download the Part 1 transcription model (~3 GB, once)
+    uv run bluebook pack [--origin URL] [--check]   # build the glasses app .ehpk for Even Hub beta/store
 
 Run from the repo root. Re-running bootstrap is safe: it shows current values as defaults
 and keeps any .env keys it doesn't ask about.
@@ -14,6 +15,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -166,8 +168,16 @@ def main() -> None:
     b.add_argument("--no-check", action="store_true", help="skip the network check of the API key")
     sub.add_parser("server", help="run the dev server")
     sub.add_parser("whisper", help=f"download the faster-whisper {WHISPER} model for Part 1 ingest (~3 GB)")
+    k = sub.add_parser("pack", help="build the glasses app as an .ehpk to upload to Even Hub (beta/store)")
+    k.add_argument("--origin", help="https origin of the server the app talks to (default: this laptop's tailnet name)")
+    k.add_argument("--check", action="store_true", help="validate manifest + package id with Even Hub (needs login)")
     a = p.parse_args()
-    if a.cmd == "server":
+    if a.cmd == "pack":
+        if a.origin and not a.origin.startswith("https://"):
+            p.error("--origin must start with https://")
+        env = os.environ | ({"BB_ORIGIN": a.origin.rstrip("/")} if a.origin else {})
+        sys.exit(subprocess.call(["scripts/pack-g2.sh", *(["-c"] if a.check else [])], env=env))
+    elif a.cmd == "server":
         from .server import main as serve
 
         serve()

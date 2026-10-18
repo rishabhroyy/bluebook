@@ -38,7 +38,7 @@ laptop**. Whoever's QR was scanned last is the laptop the glasses talk to, so a 
 | Scene camera, no phone | laptop webcam at `http://localhost:8787/camera?id=scene` (localhost counts as a secure context) |
 | Scene camera, iPhone | `https://<your-laptop>.<tailnet>.ts.net/camera?id=scene` (printed by `dev.sh`; needs Tailscale) |
 | Phone on the same Wi-Fi, no Tailscale | works for the glasses app (QR uses your LAN IP); the iPhone camera page needs Tailscale for HTTPS |
-| Installable build for one laptop | `./scripts/pack-g2.sh` → `apps/g2/bluebook-<laptop>.ehpk`, whitelisted for that laptop only |
+| Installable build (Even Hub beta / store) | `uv run bluebook pack [--origin https://host] [--check]` → `apps/g2/bluebook-<host>-<version>.ehpk`; defaults to this laptop. Upload + checklist: `apps/g2/STORE.md` |
 | Someone else's skills | copy their `data/skills/<id>/` folder into yours (zip / AirDrop). Small ones can be committed to `fixtures/skills/` |
 
 The glasses run `EchoController`, which echoes your input back to you, until Part 2 is merged.
