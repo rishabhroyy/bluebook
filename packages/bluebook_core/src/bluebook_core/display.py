@@ -106,9 +106,11 @@ class Compositor:
     def reset(self) -> None:
         self._sent.clear()
 
-    def update(self, page: ShowPage, frame: OverlayFrame) -> list[SetImage]:
+    def update(self, page: ShowPage, frame: OverlayFrame, t: float | None = None) -> list[SetImage]:
+        """Changed tiles, tiles with drawn pixels first and tiles being cleared last, so a moving
+        mark shows up in its new tile before the old one is erased."""
         canvas = draw(frame)
-        out = []
+        out: list[tuple[bool, SetImage]] = []
         for b in page.boxes:
             if not isinstance(b, ImageBox):
                 continue
@@ -116,5 +118,7 @@ class Compositor:
             digest = hashlib.blake2b(tile.tobytes(), digest_size=8).digest()
             if self._sent.get(b.id) != digest:
                 self._sent[b.id] = digest
-                out.append(image_msg(b, tile))
-        return out
+                m = image_msg(b, tile)
+                m.t = t
+                out.append((tile.getbbox() is None, m))
+        return [m for _, m in sorted(out, key=lambda x: x[0])]  # stable: False (has pixels) first

@@ -5,7 +5,7 @@
  */
 export interface Protocol {
   server: ShowPage | SetText | SetImage | Control | Pong;
-  client: Hello | Input | AudioStart | AudioEnd | Imu | Lifecycle | DeviceStatus | Ping;
+  client: Hello | Input | AudioStart | AudioEnd | Imu | Lifecycle | DeviceStatus | Ping | Drawn;
   camera_hello: CameraHello;
 }
 /**
@@ -81,6 +81,7 @@ export interface SetImage {
   id: number;
   name: string;
   png_b64: string;
+  t?: number | null;
 }
 export interface Control {
   type: "control";
@@ -140,6 +141,16 @@ export interface DeviceStatus {
 export interface Ping {
   type: "ping";
   t: number;
+}
+/**
+ * Ack that a SetImage was actually drawn (superseded/coalesced images are never acked).
+ */
+export interface Drawn {
+  type: "drawn";
+  id: number;
+  name: string;
+  t?: number | null;
+  ms: number;
 }
 export interface CameraHello {
   type: "camera_hello";
