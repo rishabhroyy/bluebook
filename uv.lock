@@ -12,6 +12,7 @@ members = [
     "bluebook-core",
     "bluebook-interactive",
     "bluebook-perception",
+    "bluebook-premiere",
     "bluebook-teach",
 ]
 
@@ -80,6 +81,7 @@ dependencies = [
     { name = "bluebook-core" },
     { name = "bluebook-interactive" },
     { name = "bluebook-perception" },
+    { name = "bluebook-premiere" },
     { name = "bluebook-teach" },
 ]
 
@@ -96,6 +98,7 @@ requires-dist = [
     { name = "bluebook-core", editable = "packages/bluebook_core" },
     { name = "bluebook-interactive", editable = "packages/bluebook_interactive" },
     { name = "bluebook-perception", editable = "packages/bluebook_perception" },
+    { name = "bluebook-premiere", editable = "packages/bluebook_premiere" },
     { name = "bluebook-teach", editable = "packages/bluebook_teach" },
 ]
 
@@ -160,6 +163,23 @@ requires-dist = [
     { name = "bluebook-core", editable = "packages/bluebook_core" },
     { name = "faster-whisper", specifier = ">=1.0" },
     { name = "python-multipart", specifier = ">=0.0.12" },
+]
+
+[[package]]
+name = "bluebook-premiere"
+version = "0.1.0"
+source = { editable = "packages/bluebook_premiere" }
+dependencies = [
+    { name = "bluebook-core" },
+    { name = "bluebook-interactive" },
+    { name = "bluebook-teach" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bluebook-core", editable = "packages/bluebook_core" },
+    { name = "bluebook-interactive", editable = "packages/bluebook_interactive" },
+    { name = "bluebook-teach", editable = "packages/bluebook_teach" },
 ]
 
 [[package]]
