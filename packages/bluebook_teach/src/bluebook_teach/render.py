@@ -12,6 +12,7 @@ import unicodedata
 from bluebook_core.skill import SkillPackage, Step
 
 TIP_CHARS = 120  # teach_page "tip": ~3 lines
+HEARD_CHARS = 56  # one tip line (~60 chars in the simulator) for the learner's own words above an answer
 STATUS_CHARS = 60  # teach_page "status": one dim line
 MSG_CHARS = 1000  # message_page build limit (SDK)
 MAX_ANSWER_PAGES = 4
@@ -98,6 +99,14 @@ def detail_pages(pkg: SkillPackage, step: Step, extra_substeps: list[str] = ()) 
     if step.why:
         pages += paginate(f"Why. {step.why}")
     return pages
+
+
+def with_heard(heard: str, page: str) -> str:
+    """'"which way is closed?"' on its own line above the answer page, cut to one line."""
+    h = sanitize(heard)
+    if len(h) > HEARD_CHARS:
+        h = h[: HEARD_CHARS - 3].rstrip() + "..."
+    return f'"{h}"\n{page}'
 
 
 def answer_pages(pages: list[str]) -> list[str]:

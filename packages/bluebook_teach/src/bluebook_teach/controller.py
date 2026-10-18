@@ -35,9 +35,10 @@ FRESH_S = 2.0  # a scene frame older than this is not shown to a model
 SCENE_EVERY_S = 4.0  # scene check cadence while a fresh frame exists
 SCENE_CONFIDENT = 0.7  # suggest "looks done" after 2 agreeing checks at this confidence
 
-LISTENING = "● listening"
-THINKING = "thinking..."
-FAILED = "could not answer, hold to retry"
+# Push-to-talk feedback goes in the big "tip" area: the dim status line was easy to miss on glass.
+LISTENING = "● Listening... let go when you're done."
+THINKING = "Thinking..."
+FAILED = "Couldn't answer. Hold to ask again."
 LOOKS_DONE = "★ looks done, tap"
 
 # teach_page's image band (img_l + img_r): a step keyframe goes here unless Part 3 owns it.
@@ -102,7 +103,7 @@ class TeachController(Controller):
         self.epoch = 0  # bumped on every navigation; async results from an older epoch are dropped
         self.question = 0  # bumped per utterance; an older question's answer is dropped
         self.note = ""  # transient status (listening / thinking / error), shown instead of the step title
-        self.heard = ""  # last transcript, shown in the status line while its answer is up
+        self.heard = ""  # last transcript, shown above its answer in the tip
         self.suggest = False  # scene checks agree the step looks done (a suggestion, never an advance)
         self.streak = 0  # consecutive confident "done" scene checks on this step
         self.flagged: set[int] = set()  # common mistakes already shown on this step
@@ -346,10 +347,10 @@ class TeachController(Controller):
 
     async def _update(self, conn: GlassesConnection, note_only: bool = False) -> None:
         """In-place update of whatever screen is up, e.g. for the listening/thinking note or an answer.
-        note_only: on a step only the status line changed, so skip resending the tip (~83 ms on glass)."""
+        note_only: on a step only the tip changed, so skip resending the status line (~83 ms on glass)."""
         screen = conn.state["screen"]
         if screen == "step" and note_only:
-            await conn.text("status", self._status(conn))
+            await conn.text("tip", self._tip(conn))
         elif screen == "step":
             await self._refresh(conn)
         elif screen == "overview":
@@ -361,7 +362,8 @@ class TeachController(Controller):
         """Overview text, or the tutor's answer to a question asked on the overview."""
         s = conn.state
         if s["answer"]:
-            body = "\n\n".join(s["answer"]) + "\n\nTap to start. Double tap for the library."
+            heard = f'"{self.heard}"\n\n' if self.heard else ""
+            body = heard + "\n\n".join(s["answer"]) + "\n\nTap to start. Double tap for the library."
         else:
             body = render.overview_text(self._pkg(conn))
         return f"{self.note}\n\n{body}" if self.note else body
@@ -384,14 +386,17 @@ class TeachController(Controller):
         return render.detail_pages(self._pkg(conn), step, s["extra_substeps"].get(step.id, []))
 
     def _tip(self, conn: GlassesConnection) -> str:
+        if self.note:  # listening / thinking / error replace the tooltip until the answer (or release)
+            return render.sanitize(self.note)
         pages = self._pages(conn)
-        return pages[min(conn.state["view"], len(pages) - 1)]
+        page = pages[min(conn.state["view"], len(pages) - 1)]
+        if conn.state["answer"] and self.heard:  # what the learner said, above the answer to it
+            return render.with_heard(self.heard, page)
+        return page
 
     def _status(self, conn: GlassesConnection) -> str:
         s = conn.state
-        if self.note:  # listening / thinking / error: no page counter, it's not about the pages
-            return render.status_line(self._pkg(conn), s["step"], 0, 0, self.note)
-        note = f'"{self.heard}"' if s["answer"] and self.heard else LOOKS_DONE if self.suggest else ""
+        note = LOOKS_DONE if self.suggest else ""
         return render.status_line(self._pkg(conn), s["step"], s["view"], len(self._pages(conn)), note)
 
     # ------------------------------------------------------------- image band

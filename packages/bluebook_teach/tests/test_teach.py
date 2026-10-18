@@ -227,15 +227,17 @@ async def test_question_answer_pages_then_back_to_step(make, replies):
     await to_step(ctrl, conn)
     replies.append(TutorReply(transcript="which way is closed?", pages=["Clockwise. " + "turn " * 30, "Done."]))
     sent = await press(ctrl, conn, "long_press")
-    assert [m["name"] for m in sent] == ["status"]  # the tip isn't resent for a status-only change
-    assert status(conn) == f"1/5 | {LISTENING}"
+    assert sent == [{"type": "text", "id": 4, "name": "tip", "content": LISTENING}]  # big area, status untouched
     await ctrl.on_utterance(conn, PCM)
-    assert status(conn) == f"1/5 | {THINKING}"
+    assert tip(conn) == THINKING
     await settle(ctrl)
 
     answer = conn.state["answer"]
     assert len(answer) == 3 and all(len(p) <= render.TIP_CHARS for p in answer)  # long page re-paginated
-    assert tip(conn) == answer[0] and '"which way is closed?"' in status(conn)
+    assert tip(conn) == f'"which way is closed?"\n{answer[0]}'  # their words above the answer
+    await press(ctrl, conn, "scroll_down")
+    assert tip(conn) == f'"which way is closed?"\n{answer[1]}' and status(conn).endswith("pg 2/3")
+    await press(ctrl, conn, "scroll_up")
     assert replies.calls[0]["step_id"] == "s1"
     for _ in range(3):
         await press(ctrl, conn, "scroll_down")
@@ -324,9 +326,9 @@ async def test_model_failure_shows_retry_and_lesson_continues(make, replies):
     await to_step(ctrl, conn)
     replies.append(TimeoutError())
     await say(ctrl, conn)
-    assert status(conn) == f"1/5 | {FAILED}"
+    assert tip(conn) == FAILED
     await press(ctrl, conn, "tap")
-    assert tip(conn) == "Open the faucet to drain remaining pressure." and FAILED not in status(conn)
+    assert tip(conn) == "Open the faucet to drain remaining pressure."
 
 
 async def test_release_without_audio_clears_listening(make):
@@ -334,7 +336,7 @@ async def test_release_without_audio_clears_listening(make):
     await to_step(ctrl, conn)
     await press(ctrl, conn, "long_press")
     await press(ctrl, conn, "long_press_release")  # too short: core never calls on_utterance
-    assert status(conn).startswith("1/5 | Turn off the water")
+    assert tip(conn) == "Turn the shutoff valve clockwise until it stops."
 
 
 async def test_pushed_controller_owns_the_screen(make, replies):
@@ -688,6 +690,12 @@ def test_is_danger_covers_step_and_whole_task_notes():
     assert not render.is_danger(pkg, pkg.steps[3])  # "caution" only
     pkg.safety.append(SafetyNote(text="Gas line nearby.", severity="danger"))  # no step_ids: whole task
     assert all(render.is_danger(pkg, st) for st in pkg.steps)
+
+
+def test_heard_line_is_cut_to_one_line():
+    t = render.with_heard("could you tell me again which of these two valves is the cold water one", "Right one.")
+    first, second = t.split("\n")
+    assert len(first) <= render.HEARD_CHARS + 2 and first.endswith('..."') and second == "Right one."
 
 
 def test_overview_keeps_safety_when_truncated():
