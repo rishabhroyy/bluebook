@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -50,12 +51,13 @@ async def run(
     if not videos:
         raise ValueError("at least one video required")
 
+    t0 = time.monotonic()
     cache = StageCache(skill_id, force_stage=force_stage)
     if transcriber is None:
         transcriber = default_transcriber()
 
     # ── Stage 1: ingest (first video; M4 will handle multi-video merge) ──────
-    log.info("=== stage 1: ingest ===")
+    log.info("=== stage 1/9: ingest (+%.0f s) ===", time.monotonic() - t0)
     ingest_result = ingest.run(videos[0], skill_id, cache)
     source_video_data = ingest_result["source_video"]
     normalized_path = ingest_result["normalized_path"]
@@ -66,7 +68,7 @@ async def run(
     source_video = SourceVideo.model_validate(source_video_data)
 
     # ── Stage 2: transcribe ───────────────────────────────────────────────────
-    log.info("=== stage 2: transcribe ===")
+    log.info("=== stage 2/9: transcribe (+%.0f s) ===", time.monotonic() - t0)
     from .cache import sha256_file, sha256_str
 
     audio_hash = sha256_file(audio_path) if audio_path.exists() else sha256_str(str(audio_path))
@@ -81,7 +83,7 @@ async def run(
     transcript_json = json.dumps([s.model_dump() for s in transcript_segs], indent=2)
 
     # ── Stage 3: outline ──────────────────────────────────────────────────────
-    log.info("=== stage 3: outline ===")
+    log.info("=== stage 3/9: outline (+%.0f s) ===", time.monotonic() - t0)
     uploaded = await models.upload(Path(normalized_path))
     outline_result = await outline.run(uploaded, transcript_json, cache)
     outline_result.steps = _clamp_steps(outline_result.steps, source_video.duration_s)
@@ -100,7 +102,7 @@ async def run(
     objects_json = json.dumps([o.model_dump() for o in objects.values()], indent=2)
 
     # ── Stage 4: detail ───────────────────────────────────────────────────────
-    log.info("=== stage 4: detail ===")
+    log.info("=== stage 4/9: detail (+%.0f s) ===", time.monotonic() - t0)
     detail_steps = await detail.run_all(
         uploaded,
         [s.model_dump() for s in outline_result.steps],
@@ -112,11 +114,12 @@ async def run(
     detail_json = json.dumps([s.model_dump() for s in detail_steps], indent=2)
 
     # ── Stage 5: keyframes ────────────────────────────────────────────────────
-    log.info("=== stage 5: keyframes ===")
+    log.info("=== stage 5/9: keyframes (+%.0f s) ===", time.monotonic() - t0)
     built_steps: list[Step] = []
 
     for i, (outline_step, d_step) in enumerate(zip(outline_result.steps, detail_steps)):
         step_id = f"s{i + 1}"
+        log.info("keyframes: step %d/%d …", i + 1, len(detail_steps))
         # resolve object refs from detail pass
         step_objects = [
             StepObject(object_id=so.object_id, role=so.role, action=so.action)
@@ -165,14 +168,14 @@ async def run(
         )
 
     # ── Stage 6: synthesize ───────────────────────────────────────────────────
-    log.info("=== stage 6: synthesize ===")
+    log.info("=== stage 6/9: synthesize (+%.0f s) ===", time.monotonic() - t0)
     synth = await synthesize.run(outline_result.model_dump_json(), detail_json, cache)
 
     faq = [QA(q=qa.q, a=qa.a, step_ids=qa.step_ids, provenance="inferred") for qa in synth.faq]
     safety_notes = [SafetyNote(text=sn.text, severity=sn.severity) for sn in outline_result.safety]
 
     # ── Stage 7: verify (agentic critique loop) ───────────────────────────────
-    log.info("=== stage 7: verify ===")
+    log.info("=== stage 7/9: verify (+%.0f s) ===", time.monotonic() - t0)
     steps_json = json.dumps([s.model_dump() for s in built_steps], indent=2)
     verify_result = await verify.run(transcript_json, outline_result.model_dump_json(), steps_json, cache)
 
@@ -234,15 +237,21 @@ async def run(
         log.warning("pre-index package has issues (will attempt to continue): %s", errs)
 
     # ── Stage 8: index + embed ────────────────────────────────────────────────
-    log.info("=== stage 8: index ===")
+    log.info("=== stage 8/9: index (+%.0f s) ===", time.monotonic() - t0)
     pkg, embeddings = await index.run(pkg, cache)
 
     # ── Stage 9: save ─────────────────────────────────────────────────────────
-    log.info("=== stage 9: save ===")
+    log.info("=== stage 9/9: save (+%.0f s) ===", time.monotonic() - t0)
     errs = pkg.check()
     if errs:
         raise ValueError("SkillPackage validation failed:\n" + "\n".join(errs))
 
     store.save(pkg, embeddings)
-    log.info("pipeline: saved skill '%s' — %d steps, %d chunks", skill_id, len(pkg.steps), len(pkg.chunks))
+    log.info(
+        "pipeline: saved skill '%s' — %d steps, %d chunks in %.0f s",
+        skill_id,
+        len(pkg.steps),
+        len(pkg.chunks),
+        time.monotonic() - t0,
+    )
     return pkg
