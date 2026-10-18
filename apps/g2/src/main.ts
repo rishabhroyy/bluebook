@@ -33,7 +33,7 @@ const log = (s: string) => {
 
 let bridge: EvenAppBridge
 let ws: WebSocket | null = null
-let pageCreated = false
+let startupTried = false // createStartUpPageContainer is one-shot per session (see handle)
 let talking: string | null = null // utterance id while push-to-talk is held
 
 // ------------------------------------------------------------------ rendering
@@ -87,11 +87,16 @@ async function handle(msg: ServerMsg) {
     case 'page':
       return enqueue('page', async () => {
         const c = toSdk(msg)
-        if (!pageCreated) {
+        // Startup may only be attempted once: a retry is rejected (1) after blocking ~2 s, and a page left
+        // by an earlier load of this app (e.g. a dev-server reload) makes even the first call fail. Latch the
+        // attempt, not the success, and fall through to rebuild, which works whenever a page exists.
+        if (!startupTried) {
+          startupTried = true
           const r = await bridge.createStartUpPageContainer(new CreateStartUpPageContainer(c))
-          if (r !== StartUpPageCreateResult.success) throw new Error(`createStartUpPageContainer=${r}`)
-          pageCreated = true
-        } else if (!(await bridge.rebuildPageContainer(new RebuildPageContainer(c)))) throw new Error('rebuild failed')
+          if (r === StartUpPageCreateResult.success) return
+          log(`createStartUpPageContainer=${r}, using rebuild`)
+        }
+        if (!(await bridge.rebuildPageContainer(new RebuildPageContainer(c)))) throw new Error('rebuild failed')
       })
     case 'text':
       return enqueue(`t${msg.id}`, () => bridge.textContainerUpgrade(new TextContainerUpgrade({
@@ -171,6 +176,22 @@ function onEvent(ev: EvenHubEvent) {
 
 // ---------------------------------------------------------------- transport
 
+// The server keys a lesson by device serial so reconnects resume it. Some hosts return no device info,
+// so fall back to an id kept in the Even app's storage for this phone.
+async function deviceInfo(): Promise<Record<string, unknown>> {
+  const info = await bridge.getDeviceInfo().catch(() => null)
+  const device: Record<string, unknown> = info ? JSON.parse(JSON.stringify(info)) : {}
+  if (!device.sn) {
+    let id = await bridge.getLocalStorage('bb_device_id').catch(() => '')
+    if (!id) {
+      id = `phone-${crypto.randomUUID().slice(0, 8)}`
+      await bridge.setLocalStorage('bb_device_id', id).catch(() => false)
+    }
+    device.sn = id
+  }
+  return device
+}
+
 let backoff = 500
 function connect() {
   log(`connecting ${SERVER}`)
@@ -178,9 +199,9 @@ function connect() {
   ws.binaryType = 'arraybuffer'
   ws.onopen = async () => {
     backoff = 500
-    const info = await bridge.getDeviceInfo()
-    send({ type: 'hello', protocol: 1, client: 'g2', device: info ? JSON.parse(JSON.stringify(info)) : {} } satisfies Hello)
-    log('connected')
+    const device = await deviceInfo()
+    send({ type: 'hello', protocol: 1, client: 'g2', device } satisfies Hello)
+    log(`connected as ${device.sn}`)
   }
   ws.onmessage = (m) => void handle(JSON.parse(m.data as string) as ServerMsg).catch((e) => log(`handle: ${e}`))
   ws.onclose = () => {
