@@ -24,6 +24,7 @@ async def run_step(
     transcript_slice: str,
     objects_json: str,
     cache: StageCache,
+    duration: float | None = None,
 ) -> DetailStep:
     input_hash = sha256_str(f"{uploaded_file.uri}:{step_title}:{t_start}:{t_end}:{transcript_slice}")
     cache_key = f"detail_{sha256_str(step_title)[:8]}"
@@ -34,6 +35,8 @@ async def run_step(
     # extend clip slightly for context; Gemini Duration requires integer seconds
     clip_start = int(max(0.0, t_start - 2.0))
     clip_end = int(t_end + 2.0) + 1
+    if duration is not None:  # a clip past the end of the video is rejected (400 INVALID_ARGUMENT)
+        clip_end = min(clip_end, int(duration))
     clip = models.video(uploaded_file, fps=3, start=clip_start, end=clip_end)
 
     context = (
@@ -60,6 +63,7 @@ async def run_all(
     transcript_segments: list,
     objects_json: str,
     cache: StageCache,
+    duration: float | None = None,
 ) -> list[DetailStep]:
     import asyncio
 
@@ -76,6 +80,7 @@ async def run_all(
             transcript_slice(step["t_start"], step["t_end"]),
             objects_json,
             cache,
+            duration,
         )
         for step in outline_steps
     ]
