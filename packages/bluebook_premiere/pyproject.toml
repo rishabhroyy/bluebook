@@ -1,0 +1,18 @@
+[project]
+name = "bluebook-premiere"
+version = "0.1.0"
+description = "Render glasses-POV G2 graphics as transparent PNGs for video editing"
+requires-python = ">=3.12"
+dependencies = ["bluebook-core", "bluebook-teach", "bluebook-interactive"]
+
+[project.scripts]
+bluebook-premiere = "bluebook_premiere.cli:main"
+
+[tool.uv.sources]
+bluebook-core = { workspace = true }
+bluebook-teach = { workspace = true }
+bluebook-interactive = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

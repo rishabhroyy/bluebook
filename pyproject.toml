@@ -2,7 +2,7 @@
 name = "bluebook"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["bluebook-core", "bluebook-perception", "bluebook-teach", "bluebook-interactive"]
+dependencies = ["bluebook-core", "bluebook-perception", "bluebook-teach", "bluebook-interactive", "bluebook-premiere"]
 
 [tool.uv.workspace]
 members = ["packages/*"]
@@ -12,6 +12,7 @@ bluebook-core = { workspace = true }
 bluebook-perception = { workspace = true }
 bluebook-teach = { workspace = true }
 bluebook-interactive = { workspace = true }
+bluebook-premiere = { workspace = true }
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6", "httpx2"]
