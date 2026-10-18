@@ -161,14 +161,18 @@ class TeachController(Controller):
             await conn.control(exit=True)  # required at the root page
 
     async def _input_overview(self, conn: GlassesConnection, ev: Input) -> None:
-        if ev.kind == "tap":
+        if ev.kind == "tap" and conn.state["answer"]:
+            await self._dismiss(conn)
+        elif ev.kind == "tap":
             await self._go(conn, "step", step=0)
         elif ev.kind == "double_tap":
             await self._go(conn, "library")
 
     async def _input_step(self, conn: GlassesConnection, ev: Input) -> None:
         s = conn.state
-        if ev.kind == "tap":
+        if ev.kind == "tap" and s["answer"]:
+            await self._dismiss(conn)
+        elif ev.kind == "tap":
             if s["step"] + 1 < len(self._pkg(conn).steps):
                 await self._go(conn, "step", step=s["step"] + 1)
             else:
@@ -177,6 +181,13 @@ class TeachController(Controller):
             await self._go(conn, "overview")
         elif ev.kind in ("scroll_down", "scroll_up"):
             await self._scroll(conn, 1 if ev.kind == "scroll_down" else -1)
+
+    async def _dismiss(self, conn: GlassesConnection) -> None:
+        """First tap after an answer (or a camera warning) closes it and shows the instruction it covered;
+        the next tap advances. Deviates from the brief's table, where tap always advances (owner's call, 2026-10-17)."""
+        conn.state["answer"], conn.state["view"] = [], 0
+        self.heard = ""
+        await self._update(conn)
 
     async def _input_done(self, conn: GlassesConnection, ev: Input) -> None:
         if ev.kind == "tap":
@@ -363,7 +374,7 @@ class TeachController(Controller):
         s = conn.state
         if s["answer"]:
             heard = f'"{self.heard}"\n\n' if self.heard else ""
-            body = heard + "\n\n".join(s["answer"]) + "\n\nTap to start. Double tap for the library."
+            body = heard + "\n\n".join(s["answer"]) + "\n\nTap to close. Double tap for the library."
         else:
             body = render.overview_text(self._pkg(conn))
         return f"{self.note}\n\n{body}" if self.note else body

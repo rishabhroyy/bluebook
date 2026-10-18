@@ -267,6 +267,34 @@ async def test_tutor_actions(make, replies, reply, start, want_screen, want_step
         assert tip(conn) == (render.answer_pages(reply.pages) or [tip(conn)])[0]
 
 
+async def test_first_tap_closes_the_answer_second_tap_advances(make, replies):
+    ctrl, conn = make()
+    await to_step(ctrl, conn, 1)
+    replies.append(TutorReply(transcript="why?", pages=["So it doesn't spray.", "More."]))
+    await say(ctrl, conn)
+    await press(ctrl, conn, "scroll_down")  # reading page 2 of the answer
+    sent = await press(ctrl, conn, "tap")
+    assert conn.state["step"] == 1 and conn.state["answer"] == []
+    assert tip(conn) == "Open the faucet to drain remaining pressure." and status(conn).startswith("2/5 | Relieve")
+    assert all(m["type"] == "text" for m in sent)  # in place, no page rebuild, no StepChanged
+    assert hub.last(StepChanged, conn.session).step_id == "s2"
+    await press(ctrl, conn, "tap")
+    assert conn.state["step"] == 2
+
+
+async def test_first_tap_closes_an_answer_on_the_overview(make, replies):
+    ctrl, conn = make()
+    await ctrl.on_connect(conn)
+    await press(ctrl, conn, "list_select")
+    replies.append(TutorReply(pages=["About ten minutes."]))
+    await say(ctrl, conn)
+    await press(ctrl, conn, "tap")
+    assert conn.state["screen"] == "overview"
+    assert conn.ws.sent[-1]["content"].startswith("Fix a leaky sink supply fitting\nTap to start.")
+    await press(ctrl, conn, "tap")
+    assert conn.state["screen"] == "step"
+
+
 async def test_add_substeps_extends_the_step(make, replies):
     ctrl, conn = make()
     await to_step(ctrl, conn)
