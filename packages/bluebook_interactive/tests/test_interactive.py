@@ -666,6 +666,11 @@ def test_locate_flow_votes_then_uses_the_apps_anchor_and_keeps_it_across_steps(t
         return boxes[min(len(calls) - 1, len(boxes) - 1)]
 
     monkeypatch.setattr(T.vision, "ground", fake_ground)
+
+    async def gemini_down(jpeg, tg):  # Gemini erroring must leave the Jev flow exactly as it was
+        raise RuntimeError("no key")
+
+    monkeypatch.setattr(T.vision, "gemini_ground", gemini_down)
     frame = lambda: hub.publish(CameraFrame(session="scene", t=time.time(), jpeg=b"x", width=10, height=10))
 
     async def wait(cond):
@@ -1076,3 +1081,57 @@ def test_lesson_timeline_reports_each_link_of_the_chain():
         "poses 2 (face in 1), glasses draw acks 1",
     ):
         assert want in out, (want, out)
+
+
+def test_gemini_answer_replaces_jev_and_its_not_visible_takes_the_box_down(tmp_path, monkeypatch):
+    import asyncio
+
+    from bluebook_core.protocol import CameraFrame
+    from bluebook_interactive import targets as T
+
+    gem: list = []
+    jev, card = (0.7, 0.7, 0.8, 0.8), (0.2, 0.3, 0.4, 0.5)
+
+    async def fake_gemini(jpeg, tg):
+        return gem.pop(0)
+
+    async def fake_jev(jpeg, tg, ex=()):
+        return jev
+
+    monkeypatch.setattr(T.vision, "gemini_ground", fake_gemini)
+    monkeypatch.setattr(T.vision, "ground", fake_jev)
+    f = CameraFrame(session="scene", t=1.0, jpeg=b"x", width=10, height=10)
+    mug = StepTarget(object_id="mug", name="mug")
+    st = StepChanged(session="s", skill_id="x", step_id="a", targets=[mug])
+
+    async def go():
+        tk = Tracker(tmp_path)  # arkit-world
+        tk.app = app = FakeApp()
+        tk.hello = PoseHello(type="pose_hello", source="arkit-world")
+        await tk.targets.on_step(st)
+        gem.append(card)
+        await tk.targets._gemini("mug", f, "s", st, mug)
+        assert app.sent == [{"type": "locate", "id": "mug", "box": list(card)}]
+        tk.targets.pending.clear()  # the app answered
+        for _ in range(3):  # Jev agreeing on another spot is ignored while Gemini's answer is fresh
+            await tk.targets._locate_world(f, "s", st, mug)
+        assert len(app.sent) == 1
+        gem.append(None)
+        await tk.targets._gemini("mug", f, "s", st, mug)
+        assert app.sent[-1] == {"type": "forget", "id": "mug"}
+
+        tc = Tracker(tmp_path / "cam")  # camera-frame mode: Gemini re-tracks, or untracks when it can't see it
+        tc.app = capp = FakeApp()
+        tc.hello = PoseHello(type="pose_hello", source="vision")
+        await tc.targets.on_step(st)
+        await tc.targets._ground_cam(f, "s", st, mug)
+        gem.append(card)
+        await tc.targets._gemini(T.tid("s", "mug"), f, "s", st, mug)
+        assert capp.sent[-1] == {"type": "track", "id": T.tid("s", "mug"), "box": list(card)}
+        await tc.targets._ground_cam(f, "s", st, mug)  # Jev right after: ignored
+        assert tc.targets.anchors[("s", "mug")].box == card
+        gem.append(None)
+        await tc.targets._gemini(T.tid("s", "mug"), f, "s", st, mug)
+        assert capp.sent[-1] == {"type": "untrack", "id": T.tid("s", "mug")} and ("s", "mug") not in tc.targets.anchors
+
+    asyncio.run(go())

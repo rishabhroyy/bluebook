@@ -34,6 +34,7 @@ class Models:
     tutor: str = _env("BB_MODEL_TUTOR", "gemini-3.8-flash")  # Part 2: conversation + audio questions
     scene: str = _env("BB_MODEL_SCENE", "gemini-3.5-flash-lite")  # Part 2: periodic scene checks (cheap, frequent)
     boxer: str = _env("BB_MODEL_BOX", "jev-preview")  # Part 3: TypeSafe Jev Box grounding (needs TYPESAFE_API_KEY)
+    detector: str = _env("BB_MODEL_DETECT", "gemini-3.5-flash-lite")  # Part 3: Gemini box (~1 s) that replaces Jev's
     embedder: str = _env("BB_MODEL_EMBED", "gemini-embedding-2-preview")  # multimodal; all parts
 
 
