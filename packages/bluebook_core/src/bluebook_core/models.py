@@ -8,7 +8,7 @@ model ids, and cost logging live in one place.
 Roles map to model ids in config.Models. Gemini is the only provider for v1 because it is
 the mainstream API that natively ingests video *with its audio track* plus timestamps
 (see docs/DESIGN.md §4). Add a provider by branching inside generate(), not by subclassing.
-Exception: box() asks TypeSafe's Jev for an object's box (Part 3 grounding, ~100 ms; Part 3 never uses Gemini).
+Exception: box() asks TypeSafe's Jev for an object's box (Part 3 grounding, ~100 ms; Gemini then replaces it).
 """
 
 from __future__ import annotations

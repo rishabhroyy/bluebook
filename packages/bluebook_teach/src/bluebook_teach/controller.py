@@ -480,7 +480,7 @@ class TeachController(Controller):
         if not step.success_criteria and not step.common_mistakes:
             return
         self.last_check, epoch = now, self.epoch
-        r = await tutor.check_scene(step, frame.jpeg)
+        r = await tutor.check_scene(pkg, step, frame.jpeg)
         if self._stale(conn, epoch):
             return
         confident = r.confidence >= SCENE_CONFIDENT

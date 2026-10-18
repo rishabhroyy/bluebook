@@ -16,7 +16,7 @@ so nobody waits on anyone else's machine.
 
 ```bash
 uv run bluebook bootstrap # once per laptop: checks prereqs, asks for your Gemini key (hidden) and settings,
-                          # tests the key, writes .env, copies the sample skill, installs app deps
+                          # tests the key, writes .env, creates data/skills/, installs app deps
 ./scripts/dev.sh          # run everything (it runs bootstrap for you if .env is missing)
 ./scripts/dev.sh --sim    # also opens the Even Hub simulator, so no glasses are needed
 ```

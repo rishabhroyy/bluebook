@@ -49,6 +49,12 @@ VOTES, VOTE_WINDOW_S = 3, 2.0  # last boxes per target that may agree, and how o
 AGREE = 0.05  # box centres this close (normalised image units) are the same place
 MOVED = 0.08  # agreed box this far from the last located one: the object moved, locate again
 LOCATE_WAIT_S = 4.0  # an unanswered locate is dropped after this
+# Gemini runs alongside every Jev grounding and its answer replaces Jev's when it lands (~1 s, flash-lite, camera-batt
+# 2026-10-18), including "not visible": Jev's Box always answers, so with the part out of view (in a hand, inside the
+# camera) it boxed the camera or the other part. While a Gemini answer is fresh, Jev's boxes for that target are
+# ignored; if Gemini stops answering (error, no key), Jev takes over again after GEMINI_HOLD_S.
+GEMINI_EVERY_S = 1.0  # start a Gemini check per target at most this often (also bounds error logs when it is down)
+GEMINI_HOLD_S = 5.0  # a Gemini answer this fresh beats Jev
 
 
 @dataclass
@@ -126,6 +132,8 @@ class Targets:
         self.ground_now: asyncio.Event | None = None  # made in the running loop
         self.rec: Callable[[str, dict], None] = lambda kind, d: None  # session log (Tracker sets it)
         self._inflight: dict[str, asyncio.Task] = {}  # one grounding call per target at a time, run in the background
+        self._gem: dict[str, tuple[float, tuple[float, float, float, float] | None]] = {}  # key -> (when, Gemini box)
+        self._gem_t: dict[str, float] = {}  # key -> when a Gemini check last started
 
     def active(self, session: str) -> list[str]:
         return [t.object_id for t in (self.steps[session].targets if session in self.steps else [])]
@@ -204,6 +212,7 @@ class Targets:
         ids = {o for (ss, o) in self.anchors if ss == s} | {t.object_id for t in (old.targets if old else [])}
         for oid in ids - {PHONE}:
             self.tracks.pop(tid(s, oid), None)
+            self._gem.pop(tid(s, oid), None)
             await self.send({"type": "untrack", "id": tid(s, oid)})
         self.app_owned &= {t.object_id for t in ev.targets}
         self._tried_w.clear()
@@ -257,6 +266,7 @@ class Targets:
                     continue
                 self._frame_w[tg.object_id], self._tried_w[tg.object_id] = f.t, now
                 self._spawn(tg.object_id, self._locate_world(f, sid, st, tg))
+                self._gemini_check(tg.object_id, f, sid, st, tg, now)
 
     async def _locate_world(self, f: CameraFrame, sid: str, st: StepChanged, tg) -> None:
         oid = tg.object_id
@@ -265,13 +275,17 @@ class Targets:
         except Exception:
             log.exception("grounding %s failed", oid)
             return
-        if box is None or self.steps.get(sid) is not st:
-            return
         now = time.time()
+        if box is None or self.steps.get(sid) is not st or self._gemini_fresh(oid, now):
+            return
         votes = self.votes.setdefault(oid, deque(maxlen=VOTES))
         votes.append((now, box))
         if (agreed := consensus([b for t, b in votes if now - t <= VOTE_WINDOW_S])) is None:
             return
+        await self._place(sid, oid, agreed, now)
+
+    async def _place(self, sid: str, oid: str, agreed: tuple[float, float, float, float], now: float) -> None:
+        """Ask the app to put the world anchor at this box, unless it is already there or a locate is in flight."""
         last = self.located_box.get(oid)
         if (
             oid in self.world_anchors
@@ -297,8 +311,51 @@ class Targets:
             return
         if box is None or self.steps.get(sid) is not st:  # not found, or the step moved on meanwhile
             return
+        if self._gemini_fresh(tid(sid, tg.object_id), time.time()):
+            return
         self.anchors[(sid, tg.object_id)] = Anchor(box, time.time())
         await self.track(sid, tg.object_id, box)
+
+    # ------------------------------------------------------------------ Gemini, replacing Jev
+
+    def _gemini_fresh(self, key: str, now: float) -> bool:
+        return (g := self._gem.get(key)) is not None and now - g[0] < GEMINI_HOLD_S
+
+    def _gemini_check(self, key: str, f: CameraFrame, sid: str, st: StepChanged, tg, now: float) -> None:
+        if now - self._gem_t.get(key, 0) >= GEMINI_EVERY_S:
+            self._gem_t[key] = now
+            self._spawn(f"gemini {key}", self._gemini(key, f, sid, st, tg))
+
+    async def _gemini(self, key: str, f: CameraFrame, sid: str, st: StepChanged, tg) -> None:
+        oid, t0 = tg.object_id, time.time()
+        d = {"session": sid, "step_id": st.step_id, "object_id": oid, "name": tg.name, "frame_t": f.t}
+        try:
+            box = await vision.gemini_ground(f.jpeg, tg)
+        except Exception as e:  # noqa: BLE001 — Gemini down: Jev's answer stands
+            self.rec("gemini", d | {"error": repr(e)[:200], "s": round(time.time() - t0, 2)})
+            log.warning("gemini grounding %s failed: %r", oid, e)
+            return
+        self.rec("gemini", d | {"box": box, "s": round(time.time() - t0, 2)})
+        if self.steps.get(sid) is not st:
+            return
+        now = time.time()
+        self._gem[key] = (now, box)
+        if self.world():
+            self.votes.pop(oid, None)  # Jev's pending votes are superseded
+            if box is not None:
+                await self._place(sid, oid, box, now)
+            elif self.located_box.pop(oid, None) is not None:  # we placed it, Gemini can't see it: take it down
+                self.located.pop(oid, None)
+                self.pending.pop(oid, None)
+                self.anchors.pop((sid, oid), None)
+                await self.send({"type": "forget", "id": oid})
+                self.rec("forget", {"id": oid})
+        elif box is not None:
+            self.anchors[(sid, oid)] = Anchor(box, now)
+            await self.track(sid, oid, box)
+        elif self.anchors.pop((sid, oid), None):
+            self.tracks.pop(tid(sid, oid), None)
+            await self.send({"type": "untrack", "id": tid(sid, oid)})
 
     async def ground_loop(self) -> None:
         self.ground_now = asyncio.Event()
@@ -318,3 +375,4 @@ class Targets:
                 for tg in [t for t in st.targets if t.object_id != PHONE and self._due(sid, t.object_id, now)]:
                     self._tried[(sid, tg.object_id)] = now
                     self._spawn(tid(sid, tg.object_id), self._ground_cam(f, sid, st, tg))
+                    self._gemini_check(tid(sid, tg.object_id), f, sid, st, tg, now)

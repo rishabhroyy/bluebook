@@ -7,3 +7,5 @@ Return JSON with these fields.
 - issue. When mistake is set, one sentence of at most 100 characters telling the learner what to fix, naming the object. Otherwise null.
 
 If the work area isn't visible, the photo is blurry, or hands block the view, return done false with low confidence and no mistake.
+
+Identify each object by the listed looks (colour, size, shape), not by what the step expects to see. Small parts often look alike, for example a battery and a memory card. Before judging done or a mistake, check that the object in the photo matches the description of the object the step names, and not another object in the task. If you can't tell which object it is, return done false with low confidence and no mistake.

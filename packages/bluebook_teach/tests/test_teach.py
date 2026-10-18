@@ -470,6 +470,16 @@ def test_skill_context_drops_what_the_tutor_cant_use():
     assert ctx["steps"][1]["provenance"] == "inferred"  # the tutor must see provenance to hedge
 
 
+def test_scene_check_lists_every_object_so_lookalikes_can_be_told_apart():
+    pkg = store.load(SKILL, FIXTURES)
+    step = pkg.steps[1]
+    lines = tutor.object_lines(pkg, step)
+    assert len(lines) == 1 + len(pkg.objects)  # all objects, not just this step's
+    faucet = next(line for line in lines if line.startswith("- faucet"))
+    assert "Sink faucet above the counter." in faucet and "[this step: target, open]" in faucet
+    assert any("[not in this step]" in line for line in lines)
+
+
 # ------------------------------------------------------------------------- keyframes
 
 
@@ -528,7 +538,7 @@ def scene(monkeypatch):
     queue: list = []
     calls: list = []
 
-    async def check(step, jpeg):
+    async def check(pkg, step, jpeg):
         calls.append(step.id)
         return queue.pop(0)
 
@@ -628,7 +638,7 @@ async def test_scene_result_for_an_old_step_is_dropped(make, scene, monkeypatch)
     await to_step(ctrl, conn)
     gate = asyncio.Event()
 
-    async def slow(step, jpeg):
+    async def slow(pkg, step, jpeg):
         await gate.wait()
         return SceneCheck(confidence=0.9, mistake=1, issue="stale")
 
