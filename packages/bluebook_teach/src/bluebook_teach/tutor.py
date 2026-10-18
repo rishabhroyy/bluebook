@@ -93,8 +93,21 @@ async def pick_skill(skills: list[SkillPackage], pcm: bytes) -> LibraryPick:
     )
 
 
-async def check_scene(step: Step, jpeg: bytes) -> SceneCheck:
-    lines = [f"Step: {step.title}", f"Instruction: {step.instruction}", "Success criteria:"]
+def object_lines(pkg: SkillPackage, step: Step) -> list[str]:
+    """Every object in the task with what it looks like, so the VLM can tell lookalikes apart
+    (a battery vs an SD card) instead of matching "small rectangle in hand" to whatever the step names."""
+    roles = {o.object_id: f"{o.role}, {o.action}".rstrip(", ") for o in step.objects}
+    lines = ["Objects in this task (tell them apart by these looks):"]
+    for o in pkg.objects:
+        aka = f" (also: {', '.join(o.aliases)})" if o.aliases else ""
+        used = f" [this step: {roles[o.id]}]" if o.id in roles else " [not in this step]"
+        lines.append(f"- {o.name}{aka}: {o.visual_description or 'no description'}{used}")
+    return lines
+
+
+async def check_scene(pkg: SkillPackage, step: Step, jpeg: bytes) -> SceneCheck:
+    lines = object_lines(pkg, step) if pkg.objects else []
+    lines += [f"Step: {step.title}", f"Instruction: {step.instruction}", "Success criteria:"]
     lines += [f"- {c}" for c in step.success_criteria]
     lines += ["Common mistakes:"] + [f"{i}. {m}" for i, m in enumerate(step.common_mistakes, 1)]
     return await asyncio.wait_for(
