@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 
 from fastapi import WebSocket
@@ -118,7 +119,7 @@ class GlassesConnection:
 
     async def overlay(self, frame: OverlayFrame) -> None:
         if self.page:
-            for m in self._compositor.update(self.page, frame):
+            for m in self._compositor.update(self.page, frame, t=time.time()):
                 await self.send(m)
 
     # -------------------------------------------------------------- receiving

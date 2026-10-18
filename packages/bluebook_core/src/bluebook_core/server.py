@@ -28,7 +28,9 @@ from .protocol import (
     AudioStart,
     CameraFrame,
     CameraHello,
+    Drawn,
     Hello,
+    ImageDrawn,
     Imu,
     ImuSample,
     Input,
@@ -150,6 +152,10 @@ async def ws_glasses(ws: WebSocket):
                 case Imu():
                     hub.publish(ImuSample(session=session, x=msg.x, y=msg.y, z=msg.z, t=msg.t))
                     await _safe(conn.controller.on_imu(conn, msg))
+                case Drawn():
+                    hub.publish(
+                        ImageDrawn(session=session, id=msg.id, name=msg.name, t=msg.t, ms=msg.ms, at=time.time())
+                    )
                 case Ping():
                     await conn.send(Pong(t=msg.t))
                 case _:

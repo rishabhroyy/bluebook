@@ -160,6 +160,44 @@
         "type"
       ]
     },
+    "Drawn": {
+      "description": "Ack that a SetImage was actually drawn (superseded/coalesced images are never acked).",
+      "properties": {
+        "type": {
+          "const": "drawn",
+          "default": "drawn",
+          "type": "string"
+        },
+        "id": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "t": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name",
+        "ms"
+      ],
+      "title": "Drawn",
+      "type": "object"
+    },
     "Hello": {
       "properties": {
         "type": {
@@ -518,6 +556,17 @@
         },
         "png_b64": {
           "type": "string"
+        },
+        "t": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -751,6 +800,7 @@
         "mapping": {
           "audio_end": "#/$defs/AudioEnd",
           "audio_start": "#/$defs/AudioStart",
+          "drawn": "#/$defs/Drawn",
           "hello": "#/$defs/Hello",
           "imu": "#/$defs/Imu",
           "input": "#/$defs/Input",
@@ -784,6 +834,9 @@
         },
         {
           "$ref": "#/$defs/Ping"
+        },
+        {
+          "$ref": "#/$defs/Drawn"
         }
       ]
     },

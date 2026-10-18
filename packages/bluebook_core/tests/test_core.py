@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from bluebook_core import display, store
-from bluebook_core.protocol import Hello, Input, OverlayFrame, Rect, ShowPage, client_msg, server_msg
+from bluebook_core.protocol import Drawn, Hello, ImageDrawn, Input, OverlayFrame, Rect, ShowPage, client_msg, server_msg
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -154,3 +154,31 @@ def test_write_env_merges_and_preserves(tmp_path):
     assert read_env(p) == {"GEMINI_API_KEY": "new", "BB_MODEL_VIDEO": "custom", "BB_PORT": "9000"}
     assert p.read_text().startswith("# keep me\n")
     assert p.stat().st_mode & 0o777 == 0o600
+
+
+def test_drawn_roundtrip_and_reaches_hub():
+    from bluebook_core import hub
+    from bluebook_core.server import app
+
+    assert client_msg.validate_json(Drawn(id=2, name="img_l", t=1.5, ms=110).model_dump_json()) == Drawn(
+        id=2, name="img_l", t=1.5, ms=110
+    )
+    with TestClient(app) as c, c.websocket_connect("/ws/glasses") as ws:
+        ws.send_text(Hello(device={"sn": "drawn-test"}).model_dump_json())
+        ws.receive_text()
+        ws.send_text('{"type":"drawn","id":2,"name":"img_l","t":1.5,"ms":110}')
+        ws.send_text('{"type":"ping","t":0}')
+        ws.receive_text()  # pong: the drawn message before it has been processed
+        d = hub.last(ImageDrawn, "drawn-test")
+        assert d and d.ms == 110 and d.t == 1.5 and d.at > 0
+
+
+def test_compositor_orders_new_content_first_and_stamps_t():
+    page, comp = display.teach_page(), display.Compositor()
+    on_left = OverlayFrame(session="s", t=0, primitives=[Rect(x0=20, y0=100, x1=120, y1=200)])
+    on_right = OverlayFrame(session="s", t=1, primitives=[Rect(x0=320, y0=100, x1=420, y1=200)])
+    first = comp.update(page, on_left, t=12.5)
+    assert [m.name for m in first] == ["img_l", "img_r"] and {m.t for m in first} == {12.5}
+    moved = comp.update(page, on_right)
+    assert [m.name for m in moved] == ["img_r", "img_l"]  # new content first, cleared tile last
+    assert moved[0].t is None

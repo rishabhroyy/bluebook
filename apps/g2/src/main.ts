@@ -107,9 +107,14 @@ async function handle(msg: ServerMsg) {
         containerID: msg.id, containerName: msg.name, content: msg.content, ...(msg.brightness != null && { textColor: msg.brightness }),
       })))
     case 'image':
-      return enqueue(`i${msg.id}`, () => bridge.updateImageRawData(new ImageRawDataUpdate({
-        containerID: msg.id, containerName: msg.name, imageData: b64ToBytes(msg.png_b64),
-      })))
+      return enqueue(`i${msg.id}`, async () => {
+        const t0 = performance.now()
+        const r = await bridge.updateImageRawData(new ImageRawDataUpdate({
+          containerID: msg.id, containerName: msg.name, imageData: b64ToBytes(msg.png_b64),
+        }))
+        send({ type: 'drawn', id: msg.id, name: msg.name, t: msg.t ?? null, ms: performance.now() - t0 })
+        return r
+      })
     case 'control':
       // Server-driven utterance: on G2 hardware the long-press START never reaches apps (only the release
       // does), so a controller can open and close the mic itself, e.g. swipe to ask, tap to send.

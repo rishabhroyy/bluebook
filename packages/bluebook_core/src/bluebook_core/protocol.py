@@ -116,6 +116,7 @@ class SetImage(BaseModel):
     id: int
     name: str
     png_b64: str
+    t: float | None = None  # server time.time() when produced; client echoes it in Drawn
 
 
 class Control(BaseModel):
@@ -191,8 +192,18 @@ class Ping(BaseModel):
     t: float
 
 
+class Drawn(BaseModel):
+    """Ack that a SetImage was actually drawn (superseded/coalesced images are never acked)."""
+
+    type: Literal["drawn"] = "drawn"
+    id: int
+    name: str
+    t: float | None = None  # echo of SetImage.t
+    ms: float  # duration of the SDK updateImageRawData call, measured on the phone
+
+
 ClientMsg = Annotated[
-    Hello | Input | AudioStart | AudioEnd | Imu | Lifecycle | DeviceStatus | Ping, Field(discriminator="type")
+    Hello | Input | AudioStart | AudioEnd | Imu | Lifecycle | DeviceStatus | Ping | Drawn, Field(discriminator="type")
 ]
 
 # --------------------------------------------------------------- camera client
@@ -230,6 +241,18 @@ class ImuSample(BaseModel):
     y: float
     z: float
     t: float
+
+
+class ImageDrawn(BaseModel):
+    """Every glasses Drawn ack, re-published per session. Lets parts flow-control overlays to the
+    glasses' real rate and measure latency (at - t = server->glasses->drawn round trip)."""
+
+    session: str
+    id: int
+    name: str
+    t: float | None = None
+    ms: float
+    at: float  # server receive time
 
 
 class StepTarget(BaseModel):
