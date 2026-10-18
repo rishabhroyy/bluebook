@@ -2,6 +2,10 @@
 
 Suggested branch: `part1-perception` · Package: `packages/bluebook_perception/` · Read first: `AGENTS.md`, `docs/DESIGN.md` §1, §4, §5.1, §6.1
 
+> **Status: merged.** The pipeline below is built as described (stages in `stages/`, prompts in `prompts/`, cache in
+> `data/work/<id>/`, eval harness in `eval/`). Transcription uses faster-whisper rather than mlx-whisper so it also runs
+> off Apple Silicon (`docs/spikes.md`); `--transcriber gemini` is the fallback.
+
 ## Goal
 
 Turn one iPhone recording of an expert doing a task, with **video and audio**, into a `SkillPackage`

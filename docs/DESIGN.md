@@ -1,6 +1,6 @@
 # bluebook — Design Document (cycle 1)
 
-Status: draft for cycle 1 · Owner: Rishabh · Last updated 2026-10-17
+Status: cycle 1 built, all three parts merged (Part 3 behind a flag) · Owner: Rishabh · Last updated 2026-10-18
 
 bluebook lets someone learn a hands-on task (first target: blue-collar / trades tasks) through
 short, glanceable instructions on **Even Realities G2** glasses instead of a long video. An expert
@@ -9,14 +9,14 @@ teaches it back step by step on the glasses. The learner can ask questions by vo
 scene camera lets the AI see what they're doing.
 
 Cycle 1 has three parts, built in parallel on separate branches and joined through the contracts
-in `packages/bluebook_core`. Each developer creates their own branch from `main`; the names below
-are suggestions.
+in `packages/bluebook_core`. Where the build ended up differing from the plan, this document describes
+what was built and says why.
 
 | Part | Suggested branch | What it does | Status |
 |---|---|---|---|
-| 1. Perception / learning | `part1-perception` | iPhone video **and its audio** → `SkillPackage` on disk | core |
-| 2. Playback / teaching | `part2-teaching` | Skill library on glasses, step-by-step tooltips, voice Q&A, optional scene camera | core |
-| 3. Interactive (experimental) | `part3-interactive` | Scene camera + glasses pose → AR highlights that stay on the target object | flag `BB_INTERACTIVE=1` |
+| 1. Perception / learning | `part1-perception` | iPhone video **and its audio** → `SkillPackage` on disk | merged |
+| 2. Playback / teaching | `part2-teaching` | Skill library on glasses, step-by-step tooltips, voice Q&A, optional scene camera | merged |
+| 3. Interactive (experimental) | `part3-interactive` | Scene camera + glasses pose → AR highlights that stay on the target object | merged, flag `BB_INTERACTIVE=1` |
 
 Per-part briefs for implementing agents: `workstreams/part{1,2,3}-*.md`. How the parts join up:
 `docs/INTEGRATION.md`.
@@ -100,7 +100,8 @@ touching the parts.
 | `synthesizer` (P1) | `gemini-3.8-flash` | Text-heavy passes: FAQ, safety, consistency checks. |
 | `tutor` (P2) | `gemini-3.8-flash` | Takes the learner's **audio question directly** (no separate STT hop) plus the skill context, and returns structured JSON. |
 | `scene` (P2) | `gemini-3.5-flash-lite` | Frequent cheap frame checks against `success_criteria`. |
-| `detector` (P3) | `gemini-3.8-flash` | Open-vocabulary 2D boxes (`box_2d` = `[ymin,xmin,ymax,xmax]` normalised 0–1000) from name + visual description. SAM 3 (open weights, text-prompted segmentation + video tracking) is the local alternative if latency or cost needs it. |
+| `boxer` (P3) | TypeSafe `jev-preview` | Object box from name + visual description in ~100 ms, fast enough to look at every new frame. Its box question always answers, even when the object is out of view, so it is never trusted alone (below). |
+| `detector` (P3) | `gemini-3.5-flash-lite` | Runs alongside every Jev call (~1 s) and replaces Jev's answer when it lands, including "not visible", which takes the highlight down instead of leaving it on a lookalike. `gemini-3.8-flash` measured 5–15 s for the same job. SAM 3 (open weights) is the local alternative if latency or cost needs it. |
 | `embedder` (all) | `gemini-embedding-2-preview` | Multimodal embeddings (text, image, video, audio), so keyframes and text share one space. |
 
 - Model ids change often (they did several times this year). They live **only** in `config.py`/env.
@@ -125,21 +126,23 @@ never copy from it.
 |---|---|---|
 | `skill.py` | `SkillPackage` schema (pydantic) + `check()` referential integrity | P1 writes; P2, P3 read |
 | `store.py` | `save/load/list_skills/search/media_path` for `data/skills/<id>/`; cosine search over `embeddings.npy`, keyword fallback | all |
-| `models.py` | `generate(role, contents, schema=...)`, `embed(...)`, `upload(path)`, `video(file, fps, start, end)`, `image()`, `audio_pcm16k()` | all |
+| `models.py` | `generate(role, contents, schema=...)`, `embed(...)`, `upload(path)`, `video(file, fps, start, end)`, `image()`, `audio_pcm16k()`, `box()` (Jev) | all |
 | `config.py` | env vars + `./.env` (run from repo root), model id per role, feature flags | all |
 | `protocol.py` | wire messages (glasses + camera WS), hub event models, `ShowPage` validation against SDK limits | all + G2 app |
 | `hub.py` | in-process pub/sub, `last()` for late joiners; events: `StepChanged`, `OverlayFrame`, `CameraFrame`, `ImuSample`, `SceneObservation` | P2, P3 |
 | `display.py` | shared page layouts (`teach_page`, `list_page`, `message_page`), PNG quantising, keyframe `fit()`, overlay `Compositor` | P2, P3 |
 | `glasses.py` | `GlassesConnection` (send page/text/image/control, push/pop controller), `Controller` base, `EchoController` default | P2, P3 |
-| `server.py` | FastAPI app: `/ws/glasses`, `/ws/camera`, `/skills…`, `/camera`, mounts each part's `setup(app)` | all |
+| `server.py` | FastAPI app: `/ws/glasses`, `/ws/camera`, `/skills…`, `/camera`, `/health`, mounts each part's `setup(app)` | all |
+| `cli.py` | `bluebook bootstrap` (per-laptop setup → `.env`), `whisper`, `pack` (Even Hub `.ehpk`) | humans, agents |
 
 Also shared:
 - `apps/g2/` — the **only** glasses app: a thin client (~200 lines) that renders `ShowPage/SetText/SetImage`
   and forwards `Input/Audio/Imu/Lifecycle`. P2 and P3 change glasses behaviour **from Python**.
-- `apps/camera/index.html` — the **only** scene-camera client (Safari `getUserMedia` → JPEG over WSS).
+- `apps/camera/index.html` — the browser scene camera (Safari `getUserMedia` → JPEG over WSS). The native
+  `apps/camera-ios` app (Part 3) sends the same frames, so Part 2 works with either.
 - `contracts/*.schema.json`, `apps/g2/src/protocol.ts` — generated by `scripts/gen_contracts.py`.
-- `fixtures/skills/fix-leaky-compression-fitting/` — a hand-written skill so P2 and P3 can start
-  before P1 ships.
+- `fixtures/skills/fix-leaky-compression-fitting/` — a hand-written skill. It let P2 and P3 start before P1
+  shipped and is now the test fixture. It is not installed as a sample skill.
 
 ### 5.1 Skill package (P1 → P2/P3 contract)
 
@@ -228,14 +231,17 @@ safety-critical numbers. Eval set: 3–5 recorded tasks with hand-labelled step 
 A `TeachController` (subclass of `bluebook_core.glasses.Controller`) registered in `setup()`.
 
 - **Screens:** library (`list_page`) → overview (`message_page`: tools, safety) → step (`teach_page`) →
-  done.
+  done. If the server is unreachable the app shows an offline screen, keeps retrying, and still exits on double-tap.
+- **Steps are text only** (owner's call, 2026-10-17): the tooltip, with no keyframe in the image band
+  (`SHOW_KEYFRAMES` in the controller brings it back) and no per-step detail pages. Swipes page through the
+  current tutor answer.
 - **Input map** (contract for all controllers; P3 calibration follows it too):
 
   | Gesture | Library | Step view |
   |---|---|---|
   | tap / list select | open skill | next step (or confirm suggestion) |
   | double tap | **exit app** (`Control(exit=True)`; required at root) | back to previous screen |
-  | scroll down / up | (firmware list scroll) | next / previous detail page for this step |
+  | scroll down / up | (firmware list scroll) | next / previous page of the current answer |
   | long press (hold) | ask ("find a skill for…") | ask a question (push-to-talk) |
 
 - **Tutor:** the skill is small (≈5–30k tokens), so the whole package (minus raw transcript/chunks) goes
@@ -243,9 +249,11 @@ A `TeachController` (subclass of `bluebook_core.glasses.Controller`) registered 
   per utterance: `{transcript, reply_pages[], action: none|next|prev|goto|add_substep, goto_step}`. The
   reply is written for a ~3-line tooltip, with extra pages available by swiping.
 - **Scene awareness (optional):** when `hub.last(CameraFrame, "scene")` is fresh, it runs a cheap
-  scene check every ~4 s and on demand ("is this right?"), using the step's `success_criteria` and
-  `common_mistakes`. It debounces (2 agreeing checks) and **suggests**, never auto-advances.
-  Steps with `danger` safety notes are never auto-confirmed.
+  scene check every ~4 s, using the step's `success_criteria` and `common_mistakes` plus every object in
+  the task with its visual description, so lookalike parts (a battery and an SD card) are told apart by
+  colour and size rather than by what the step expects. A voice question also gets the latest frame
+  ("is this right?"). It debounces (2 agreeing checks) and **suggests**, never auto-advances. Steps with
+  `danger` safety notes are never auto-confirmed.
 - Publishes `StepChanged` on every step change (P3 depends on it).
 
 ### 6.3 Part 3 — Interactive AR highlighting (experimental)
@@ -260,8 +268,12 @@ Nothing is attached to the glasses or the scene.
    depth in one gravity-aligned frame, so no camera-intrinsics calibration is needed. If the front face
    is not tracked (wearer behind the phone) the app falls back to rear-camera Vision face angles plus
    LiDAR depth, which is ~10× noisier; every pose says which (`face.src = front|rear`).
-2. **Targets.** On `StepChanged` the server asks Gemini for a box in the latest frame and sends `locate`
-   to the app, which raycasts LiDAR (5×5 grid median) into a **world anchor**. The app then follows the
+2. **Targets.** On `StepChanged` the server boxes each target in the newest frame with two models at once:
+   Jev (~100 ms, constantly; a box is used once 2 of the last 3 agree) and Gemini (~1 s), whose answer replaces
+   Jev's when it lands. Gemini can say "not visible", which takes the highlight down (`untrack` / `forget`);
+   Jev cannot, and with the target hidden it boxed the nearest lookalike (12/12 on recorded keyframes). If
+   Gemini errors, Jev's answer stands. The server sends `locate` to the app, which raycasts LiDAR (5×5 grid
+   median) into a **world anchor**. The app then follows the
    object with `VNTrackObjectRequest` plus LiDAR re-sampling (`how = tracked|held`), but a located object is
    a fixed world point: the tracker may refine it by 8 cm at most, and a disagreeing measurement is ignored and
    reported (`moved`/`lost`), so the server re-locates it. Tap-to-place is also supported.
@@ -340,8 +352,10 @@ packages/bluebook_core/          shared lib + server     (main only; changes via
 packages/bluebook_perception/    Part 1                  (its own branch, e.g. part1-perception)
 packages/bluebook_teach/         Part 2                  (e.g. part2-teaching)
 packages/bluebook_interactive/   Part 3                  (e.g. part3-interactive)
+packages/bluebook_premiere/      glasses-POV graphics for demo videos (rendered through the simulator)
 apps/g2/                         shared glasses thin client (main; P2 may PR transport fixes)
 apps/camera/                     shared scene-camera page   (main)
+apps/camera-ios/                 native iPhone scene camera + Part 3 pose app
 contracts/                       generated schemas
 fixtures/skills/                 hand-written test skills (any branch may ADD fixtures)
 docs/  workstreams/  scripts/
@@ -353,8 +367,9 @@ Each part edits **only its own package**. That keeps merges conflict-free.
 ## 12. Out of scope for cycle 1
 
 Multi-user/auth, cloud deploy, skill editor UI, Live API streaming voice, multiple simultaneous
-learners, native iOS camera app (ARKit), offline/on-device models, Even Hub store submission
-(sideload only), G1 support.
+learners, offline/on-device models, public Even Hub store release (beta builds only), G1 support.
+Two items first listed here were built after all: the native iOS camera app (Part 3 needed ARKit) and
+Even Hub beta packaging (`bluebook pack`).
 
 ## 13. References
 

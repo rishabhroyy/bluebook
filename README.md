@@ -1,61 +1,73 @@
 # bluebook
 
-Learn hands-on tasks from short tooltips on Even Realities G2 glasses instead of long videos.
-An expert records a task once on an iPhone, bluebook turns it into a structured skill, and the
-glasses teach it back one step at a time. You can ask questions by voice, and an optional scene
-camera lets the AI see your progress (plus experimental AR highlights).
+Learn hands-on tasks from short, glanceable steps on Even Realities G2 glasses instead of pausing a video.
 
-- Design: [docs/DESIGN.md](docs/DESIGN.md)
-- How the parts fit together: [docs/INTEGRATION.md](docs/INTEGRATION.md)
-- Agent rules: [AGENTS.md](AGENTS.md) · per-part briefs: [workstreams/](workstreams/)
+An expert records a task once on an iPhone, talking through it as they work. bluebook turns that video and its
+audio into a structured **skill**: ordered steps, the objects involved, tips, common mistakes and safety notes.
+The glasses then teach it back one step at a time. The learner keeps their hands on the work, holds the touchpad
+to ask a question out loud, and an optional scene camera lets the tutor check their progress.
 
-## Run it on your own laptop
+## How it works
 
-Each person runs their own complete copy (their own server, API key, skills and tailnet hostname),
-so nobody waits on anyone else's machine.
+| Part | What it does | Package |
+|---|---|---|
+| 1. Perception | Video + audio → skill. Local word-level transcription, a whole-video outline pass, per-step clip passes at higher fps, sharpest-frame keyframes, a verification pass that tags every claim as observed, narrated or inferred, then embeddings for retrieval. | `bluebook_perception` |
+| 2. Teaching | The glasses UI: skill library → overview → one tooltip per step. Voice questions go straight to the tutor model as audio. A scene camera, if connected, checks each step against its success criteria and suggests "looks done"; it never advances on its own. | `bluebook_teach` |
+| 3. AR highlights (experimental, off by default) | Keeps a highlight on the step's target object as the wearer moves their head. The G2 has no camera, so an iPhone tracks the wearer's head from outside (ARKit face + LiDAR world tracking, no markers) and finds the object in the scene. | `bluebook_interactive`, `apps/camera-ios` |
 
-```bash
-uv run bluebook bootstrap # once per laptop: checks prereqs, asks for your Gemini key (hidden) and settings,
-                          # tests the key, writes .env, creates data/skills/, installs app deps
-./scripts/dev.sh          # run everything (it runs bootstrap for you if .env is missing)
-./scripts/dev.sh --sim    # also opens the Even Hub simulator, so no glasses are needed
+The glasses app is a thin client: the server sends page layouts and text, the app renders them and sends input and
+microphone audio back. All product logic is Python, in one process on the laptop, reached over Tailscale.
+
+```
+iPhone (expert video) ──▶ Part 1 ──▶ data/skills/<id>/ ──▶ Part 2 ◀──WebSocket──▶ Even app WebView ◀─BLE─▶ G2
+                                                             ▲  StepChanged  │
+iPhone (scene camera) ──JPEG / head pose────────────────────▶ Part 3 ──overlay┘
 ```
 
-Re-run `bluebook bootstrap` any time to change settings: current values are the defaults, and keys it
-doesn't ask about (e.g. `BB_MODEL_*` overrides) are kept. Non-interactive:
-`uv run bluebook bootstrap --yes --api-key "$GEMINI_API_KEY"`.
+Design, measurements and the reasons behind each choice: [docs/DESIGN.md](docs/DESIGN.md).
 
-`dev.sh` starts the server and the glasses-app dev server, runs `tailscale serve` if Tailscale is
-up, and prints a QR code. Scan it in the Even Realities app to load the glasses app **from your
-laptop**. Whoever's QR was scanned last is the laptop the glasses talk to, so a shared pair of glasses
-(or a shared phone) just rescans to switch between people.
+## Stack
 
-| Need | How |
+| Layer | Technology |
 |---|---|
-| Part 1 local transcription | `uv run bluebook whisper` once (~3 GB faster-whisper large-v3; otherwise it downloads on the first ingest) |
-| Prerequisites | `uv`, `pnpm`, a Gemini API key. Optional: Tailscale (same team tailnet, with HTTPS certificates turned on once in the admin console) |
-| No glasses | `--sim`: the simulator renders the 576×288 display and uses your laptop mic |
-| Scene camera, no phone | laptop webcam at `http://localhost:8787/camera?id=scene` (localhost counts as a secure context) |
-| Scene camera, iPhone | `https://<your-laptop>.<tailnet>.ts.net/camera?id=scene` (printed by `dev.sh`; needs Tailscale) |
-| Phone on the same Wi-Fi, no Tailscale | works for the glasses app (QR uses your LAN IP); the iPhone camera page needs Tailscale for HTTPS |
-| Installable build (Even Hub beta / store) | `uv run bluebook pack [--origin https://host] [--check]` → `apps/g2/bluebook-<host>-<version>.ehpk`; defaults to this laptop. Upload + checklist: `apps/g2/STORE.md` |
-| Someone else's skills | copy their `data/skills/<id>/` folder into yours (zip / AirDrop). Small ones can be committed to `fixtures/skills/` |
+| Server | Python 3.12+, FastAPI + uvicorn, asyncio, pydantic v2, one in-process pub/sub hub |
+| Models | Gemini via `google-genai`: video + audio understanding, tutor (audio in, structured JSON out), scene checks, multimodal embeddings, object boxes. TypeSafe Jev for fast (~100 ms) object boxes in Part 3. Every call goes through one client with a role name; model ids live only in config. |
+| Transcription | faster-whisper large-v3, local, word timestamps (Gemini as fallback) |
+| Media | ffmpeg / ffprobe, Pillow, NumPy |
+| Glasses app | TypeScript + Vite on the Even Hub SDK (`@evenrealities/even_hub_sdk`), packaged as `.ehpk` for Even Hub |
+| iPhone app | Swift / SwiftUI, ARKit (world tracking, TrueDepth face, LiDAR depth), Vision object tracking, XcodeGen |
+| Networking | Tailscale (`tailscale serve` for HTTPS/WSS on the tailnet) |
+| Tooling | uv workspace, pnpm, ruff, pytest. Wire and skill schemas are generated from the pydantic models into JSON Schema and TypeScript. |
 
-The glasses run `EchoController`, which echoes your input back to you, until Part 2 is merged.
+## Run it
 
-## Part 3 (AR highlights): the iPhone app
+Every developer runs a complete private copy (their own server, API keys, skills and tailnet name), so nobody
+depends on anyone else's machine.
 
-Part 3 is experimental and off by default. It uses a native iPhone app, `apps/camera-ios/`, as the scene
-camera and dev console: ARKit world tracking on the rear camera + LiDAR, plus front TrueDepth face
-tracking for the wearer's head pose.
+```bash
+uv run bluebook bootstrap   # once: checks prerequisites, asks for your Gemini key, writes .env, installs app deps
+./scripts/dev.sh            # server + glasses app dev server + a QR code to load the app on your phone
+./scripts/dev.sh --sim      # the same, plus the Even Hub simulator (no glasses needed)
+```
 
-| Need | How |
+Scan the QR code in the Even Realities app to load the glasses app from your laptop. Re-run `bootstrap` any time
+to change settings; current values are offered as defaults and keys it doesn't ask about are kept.
+
+| Task | How |
 |---|---|
-| Prerequisites | Xcode, `brew install xcodegen`, an iPhone with LiDAR and TrueDepth (Pro models), an Apple developer team (set `DEVELOPMENT_TEAM` in `apps/camera-ios/project.yml`), Developer Mode on the phone |
-| Enable on the server | `uv run bluebook bootstrap` and answer yes to the AR question (sets `BB_INTERACTIVE=1`), then restart `./scripts/dev.sh` |
-| Find your phone's id | plug it in, unlock, trust, then `xcrun devicectl list devices` (the Identifier column is `<UDID>`) |
-| Build + install | see below |
-| Point the app at your laptop | in the app: gear, then the server URL `./scripts/dev.sh` prints (`https://<your-laptop>.<tailnet>.ts.net`; an `http://<lan-ip>:8787` URL works on the same Wi-Fi), then Start. Allow Camera and Local Network |
+| Prerequisites | `uv`, `pnpm`, `ffmpeg`, a Gemini API key. Tailscale is recommended (HTTPS certificates turned on once in the admin console). |
+| Record a skill | `uv run bluebook-ingest VIDEO --id fix-leaky-tap --title "Fix a leaky tap"` → `data/skills/<id>/` (run `uv run bluebook whisper` once first for the ~3 GB transcription model) |
+| Scene camera | iPhone Safari: `https://<laptop>.<tailnet>.ts.net/camera?id=scene` (printed by `dev.sh`), or the laptop webcam at `http://localhost:8787/camera?id=scene` |
+| Installable build (Even Hub beta) | `uv run bluebook pack [--check]` → `apps/g2/bluebook-<host>-<version>.ehpk`. Upload steps and the release checklist: [apps/g2/STORE.md](apps/g2/STORE.md) |
+| Share skills | copy a `data/skills/<id>/` folder between laptops |
+| Glasses-POV graphics for video editing | `uv run bluebook-premiere --help` (transparent PNGs / ProRes 4444 rendered through the simulator) |
+| Checks | `uv run pytest`, `uv run ruff check . && uv run ruff format --check .`, `cd apps/g2 && pnpm build` |
+
+### Part 3: the iPhone app
+
+Off by default. Turn it on with `uv run bluebook bootstrap` (answer yes to AR mode; it also asks for a TypeSafe
+key), then restart `dev.sh`. It needs an iPhone with LiDAR and TrueDepth (Pro models), Xcode, `brew install xcodegen`
+and an Apple developer team (`DEVELOPMENT_TEAM` in `apps/camera-ios/project.yml`).
 
 ```bash
 cd apps/camera-ios && xcodegen
@@ -63,23 +75,42 @@ xcodebuild -scheme BluebookCamera -destination 'id=<UDID>' -allowProvisioningUpd
 xcrun devicectl device install app --device <UDID> build/Build/Products/Debug-iphoneos/BluebookCamera.app
 ```
 
-First launch: trust the developer in Settings > General > VPN & Device Management. More in
-`apps/camera-ios/README.md`.
-
-Try a highlight with the glasses connected (the session is the glasses' serial number; see `/interactive/status`):
+`<UDID>` comes from `xcrun devicectl list devices`. In the app, tap the gear, enter the server URL `dev.sh` printed,
+and press Start. To try a highlight without a lesson (the session id is the glasses serial, see
+`/interactive/status`):
 
 ```bash
-curl -X POST "http://localhost:8787/interactive/step/<session>?name=camera"        # test target: the phone's own lens
-curl -X POST "http://localhost:8787/interactive/step/<session>?name=hydro%20flask" # Gemini finds it in the phone's view
-curl -X POST "http://localhost:8787/interactive/step/<session>?anchor=tapped&name=thing"  # after tapping the preview
+curl -X POST "http://localhost:8787/interactive/step/<session>?name=camera"        # the phone's own lens
+curl -X POST "http://localhost:8787/interactive/step/<session>?name=hydro%20flask" # any object by name
 curl -X POST "http://localhost:8787/interactive/step/<session>"                    # clear
 ```
 
-`http://localhost:8787/interactive/status` shows tracking and the full projection chain. Each server
-run records the raw session to `data/diag/poses.jsonl` (overwritten at start); replay it with
-`uv run python -m bluebook_interactive.replay data/diag/poses.jsonl` to tune offline. To capture a fresh run
-(spoken prompts, until Ctrl-C) and print jitter/lag metrics: `uv run python -m bluebook_interactive.replay --record`.
+`/interactive/status` shows tracking and the full projection chain. Each server run records the session to
+`data/diag/poses.jsonl`; `uv run python -m bluebook_interactive.replay data/diag/poses.jsonl` replays it offline,
+and `--record` captures a fresh run and prints jitter and lag. More in
+[apps/camera-ios/README.md](apps/camera-ios/README.md).
 
-```bash
-uv run pytest && (cd apps/g2 && pnpm build)   # checks
+## Repository
+
 ```
+packages/bluebook_core/          shared contracts, server, model client, skill store, glasses display layouts
+packages/bluebook_perception/    Part 1: video → skill pipeline (prompts in prompts/*.md)
+packages/bluebook_teach/         Part 2: teaching controller, tutor, scene checks
+packages/bluebook_interactive/   Part 3: head pose, object grounding, overlay renderer, replay tools
+packages/bluebook_premiere/      renders glasses-POV graphics for demo videos
+apps/g2/                         glasses app (thin client) + Even Hub packaging
+apps/camera/                     scene-camera web page
+apps/camera-ios/                 native iPhone scene camera and Part 3 pose app
+contracts/                       JSON Schemas generated from the pydantic models
+fixtures/skills/                 a hand-written skill used by the tests
+docs/                            design, integration rules, hardware measurements
+workstreams/                     the original brief for each part
+```
+
+| Doc | Read it for |
+|---|---|
+| [docs/DESIGN.md](docs/DESIGN.md) | platform constraints, architecture, model choices, latency and accuracy budgets |
+| [docs/spikes.md](docs/spikes.md) | what was measured on real hardware |
+| [docs/INTEGRATION.md](docs/INTEGRATION.md) | how the parts connect and how shared contracts change |
+| [AGENTS.md](AGENTS.md) | working rules for contributors and coding agents |
+| [packages/bluebook_interactive/HANDOFF.md](packages/bluebook_interactive/HANDOFF.md) | Part 3 as built, and its open items |

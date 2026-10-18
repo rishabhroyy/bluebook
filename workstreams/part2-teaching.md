@@ -2,6 +2,11 @@
 
 Suggested branch: `part2-teaching` · Package: `packages/bluebook_teach/` · Read first: `AGENTS.md`, `docs/DESIGN.md` §1, §2, §5.2, §6.2, §8
 
+> **Status: merged.** Built as specified, with two changes made on hardware: step screens show the tooltip only (no
+> keyframe in the image band and no detail pages; swipes page through the current answer instead), and push-to-talk
+> feedback moved from the dim status line to the tooltip area, where it is easier to see. Scene checks also get every
+> task object's visual description, so lookalike parts are told apart. Spike results: `docs/spikes.md`.
+
 ## Goal
 
 A learner wearing G2 glasses picks a skill and is taught it step by step with short tooltips at the

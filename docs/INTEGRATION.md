@@ -1,80 +1,63 @@
-# Integration plan — how the three parts join up
+# Integration — how the parts join up
 
-## Branches
+All three parts are merged on `main`. Part 3 is mounted only when `BB_INTERACTIVE=1`; with the flag off the
+system behaves exactly as if it weren't there. New work still follows the branch and contract rules below.
 
-Each developer creates their own branch from `main`. Suggested names:
+## Seams
 
-```
-main ─┬─ part1-perception   (packages/bluebook_perception)
-      ├─ part2-teaching     (packages/bluebook_teach)
-      └─ part3-interactive  (packages/bluebook_interactive)
-```
-
-All branches start from `main`, which already has the shared core, the server,
-the G2 thin client, the camera page, the contracts, and a fixture skill. No glue code needs writing
-later. The seams already exist:
+The parts never import each other. They meet only through these core interfaces:
 
 | Seam | Producer → consumer | Mechanism |
 |---|---|---|
 | Skill package on disk | P1 → P2, P3 | `store.save()` / `store.load()` · `SkillPackage` |
-| Glasses UI | P2 (and P3 calibration) → G2 app | `GlassesConnection` + `display.*_page` · WS protocol |
-| Current step | P2 → P3 | `hub.publish(StepChanged)` |
-| Overlay | P3 → glasses | `hub.publish(OverlayFrame)` → core `Compositor` |
-| Scene frames | camera page → P2, P3 | `/ws/camera` → `hub` `CameraFrame` |
+| Glasses UI | P2 → G2 app | `GlassesConnection` + `display.*_page` · WS protocol |
+| Current step | P2 → P3 | `hub.publish(StepChanged)` with the step's target objects |
+| Overlay | P3 → glasses | `hub.publish(OverlayFrame)` → core `Compositor` (the only writer to the image boxes) |
+| Scene frames | camera page / iPhone app → P2, P3 | `/ws/camera` → `hub` `CameraFrame` |
 | Scene facts (optional) | P3 → P2 | `hub.publish(SceneObservation)` |
 | IMU | glasses → P3 | `hub` `ImuSample` |
 | Mounting | each part → server | `setup(app)` in the package `__init__` (may return a background coroutine) |
 
-Each part develops against **fakes of the others**:
-- P2 uses `fixtures/skills/*` instead of P1 output.
-- P3 publishes `StepChanged` from a small script (or the fixture + P2 once merged).
-- P1 needs nobody. Check output with `store.load` and `pkg.check()`.
+Each part can be developed against fakes of the others:
+- P2 runs on `fixtures/skills/*` or any `data/skills/<id>/` folder.
+- P3 fakes P2 with `POST /interactive/step/<session>?name=...`.
+- P1 needs nobody. Check its output with `store.load` and `pkg.check()`.
 
-## Rules for every branch
+## Branch rules
 
-1. Edit only your own package (plus `fixtures/skills/` additions and `docs/spikes.md`).
-2. `uv run pytest` must pass, **including `packages/bluebook_core/tests`** (the contract tests).
-3. Don't add a module to your package that duplicates something in core. If two parts need a thing,
-   it goes in core (see below).
-4. Keep your branch rebased on `main` (`git fetch && git rebase origin/main`) at least whenever main moves.
+1. Branch from `main` (suggested names: `part1-perception`, `part2-teaching`, `part3-interactive`).
+2. Edit only your own package (plus `fixtures/skills/` additions and `docs/spikes.md`).
+3. `uv run pytest` must pass, **including `packages/bluebook_core/tests`** (the contract tests).
+4. Don't add a module that duplicates something in core. If two parts need it, it goes in core (below).
+5. Rebase on `main` whenever it moves (`git fetch && git rebase origin/main`).
 
-## Contract changes (anything in `packages/bluebook_core`, `apps/`, `contracts/`)
+## Contract changes (`packages/bluebook_core`, `apps/g2`, `apps/camera`, `contracts/`)
 
-1. Open a **small PR to `main`** with only the core change, never mixed with part code. Include:
-   the model change, `uv run python scripts/gen_contracts.py` output, updated/added tests in
-   `test_core.py`, and a note in the PR body naming which parts are affected.
-2. Changes are **additive by default**: new optional fields with defaults. Renames/removals bump
-   `SCHEMA_VERSION` major (skill) or `PROTOCOL_VERSION` (wire) and need all affected owners' OK.
-3. After merge, every branch rebases. Regenerate any skill packages if `SCHEMA_VERSION` major changed.
+1. Open a **small PR to `main`** with only the core change, never mixed with part code. Include the model change,
+   the output of `uv run python scripts/gen_contracts.py`, new or updated tests in `test_core.py`, and a note
+   naming the affected parts.
+2. Changes are **additive by default**: new optional fields with defaults. Renames and removals bump
+   `SCHEMA_VERSION` major (skill) or `PROTOCOL_VERSION` (wire) and need every affected owner's OK.
+3. After merge, every branch rebases. Regenerate skill packages if the `SCHEMA_VERSION` major changed.
 
-Merging into `main` needs the repo owner's explicit approval. Agents open PRs and don't merge them.
+Merging into `main` needs the repo owner's explicit approval. Agents open PRs; they don't merge them.
 
-## Merge order
+## Smoke checklist (before merging anything user-facing)
 
-1. **Part 2 first.** It replaces `EchoController` and makes the system demoable with fixture skills.
-2. **Part 1.** Real skills appear in the library with no code change on P2's side.
-3. **Part 3**, behind `BB_INTERACTIVE=1`. With the flag off, the system must behave exactly as before.
-
-Before each merge: rebase on main, run the full test suite, then run the smoke checklist below on real glasses.
-
-## End-to-end smoke checklist (after each merge)
-
-- [ ] `./scripts/dev.sh` starts cleanly on a **fresh clone on a second laptop** (proves no one else's setup is needed)
-- [ ] `/health` lists mounted parts; the printed `https://<host>.ts.net/health` loads on the phone
-- [ ] G2 app connects (scan the printed QR, or `--sim`); library lists all skills in `data/skills/`
-- [ ] Fixture skill: overview → all steps → done; double-tap backs out to exit dialog
-- [ ] Hold-to-ask returns an answer in < 3 s; "go back a step" moves back
-- [ ] Phone locked 5 min → unlock → same step shown
-- [ ] (P1 merged) a freshly ingested skill plays end to end
-- [ ] (camera) `/camera?id=scene` on tripod phone; "✓ looks done" appears after completing a step
-- [ ] (P3, flag on) calibrate; highlight appears on step-1 target; flag off → no overlay traffic
+- [ ] `./scripts/dev.sh` starts cleanly on a **fresh clone on a second laptop** (no one else's setup needed)
+- [ ] `/health` lists the mounted parts, and the printed `https://<host>.ts.net/health` loads on the phone
+- [ ] The glasses app connects (scan the QR, or `--sim`) and the library lists every skill in `data/skills/`
+- [ ] A skill plays overview → every step → done; double-tap backs out to the exit dialog
+- [ ] Hold-to-ask answers in under 3 s; "go back a step" moves back
+- [ ] Phone locked 5 min → unlock → the same step is shown
+- [ ] A freshly ingested skill (`bluebook-ingest`) plays end to end
+- [ ] Scene camera on a tripod: "★ looks done" appears after completing a step
+- [ ] Part 3 on: the highlight lands on the step's target; flag off: no overlay traffic
 
 ## Demo-day runbook
 
 ```bash
-./scripts/dev.sh                   # on the demo laptop; scan the printed QR in the Even Realities app
-# tripod phone: Safari → the printed https://<host>.<tailnet>.ts.net/camera?id=scene
-# no dev server on the phone? ./scripts/pack-g2.sh and install the .ehpk as a private build
+./scripts/dev.sh        # on the demo laptop; scan the QR in the Even Realities app
+# scene camera: the iPhone app, or Safari → the printed https://<host>.<tailnet>.ts.net/camera?id=scene
+# no dev server on the phone: install the beta build (uv run bluebook pack, apps/g2/STORE.md); dev.sh still runs the server
 ```
-
-Every developer can run this on their own laptop at any time. See README §Run it on your own laptop.

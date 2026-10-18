@@ -3,6 +3,9 @@
 Suggested branch: `part3-interactive` · Package: `packages/bluebook_interactive/` · App: `apps/camera-ios/` · Enabled only with `BB_INTERACTIVE=1` (set by `uv run bluebook bootstrap`)
 Read first: `AGENTS.md`, `docs/DESIGN.md` §1, §5, §6.3, §8, then `packages/bluebook_interactive/HANDOFF.md` (current state)
 
+> **Status: merged behind `BB_INTERACTIVE=1`.** The "as built" sections below are current. Object grounding uses TypeSafe
+> Jev and Gemini together (`HANDOFF.md` §Grounding).
+
 ## Goal
 
 While the learner is on a step, highlight the step's **target object** (e.g. the water shutoff valve)
@@ -36,7 +39,7 @@ Not yours: core (contract PR), `apps/g2`, P2's controller. **Never** send `SetIm
 - Default **World mode**: ARKit `ARWorldTrackingConfiguration` (rear camera + LiDAR) with
   `userFaceTrackingEnabled` (front TrueDepth), all in one gravity-aligned world frame. If the front face is
   not tracked it falls back to rear-camera Vision face angles + LiDAR depth; each pose says `face.src = front|rear`.
-- Objects: Gemini box → server sends `locate` → LiDAR raycast (5×5 grid median) → world anchor, then followed
+- Objects: Jev + Gemini box → server sends `locate` → LiDAR raycast (5×5 grid median) → world anchor, then followed
   with `VNTrackObjectRequest` + LiDAR re-sampling (`how = tracked|held`). A located object is a fixed world point:
   the tracker may only refine it by 8 cm; a disagreeing measurement is ignored and reported as `moved` (or `lost`),
   and the server re-locates (errors are sticky until then). Tap-to-place too. The app also streams JPEG to core `/ws/camera`, so Part 2 sees it as the scene camera.
