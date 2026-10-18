@@ -99,3 +99,24 @@ These came from the Even Hub simulator 0.9.5 driven through its automation port,
 | S5 glyphs that render | | | | |
 | S6 tap to visible, median | | | | |
 | S6 voice release to first page, p50 | | | | |
+
+---
+
+## Part 3 — AR highlight (S2, S3, S7)
+
+Setup: iPhone 17 Pro in World mode (`apps/camera-ios`), wearer ~1.3 m away behind the phone (rear camera), G2
+with the overlay band of `teach_page`. Recordings: `uv run python -m bluebook_interactive.replay --record`.
+
+### 2026-10-18: rear-camera session and glasses IMU (measured)
+
+- Rear-camera Vision face at ~1.3 m: yaw ~1°/frame and wanders 3-5°; pitch noise ~2-3° (front TrueDepth ~0.08°).
+- G2 overlay band is 144 px, ~±2.7° vertical.
+- Draw round trip (publish → `drawn` ack) ~130 ms; replayed motion-to-photon lag ~350 ms on the 45 s clip
+  (`packages/bluebook_interactive/tests/rear_imu_clip.jsonl.gz`).
+- Glasses IMU (S3, partial): accelerometer only, no gyro; |a| ~1 g at rest; ~10.6 Hz at pace 100. Other pace codes
+  not yet measured. Gravity gives pitch/roll only; the tracker blends it into the camera pose.
+- Vision object tracker (iOS `VNTrackObjectRequest`): after losing an object it can "re-acquire" the background with
+  confidence > 0.5; LiDAR re-sampled there moved one anchor 1.8 m. Located objects are now fixed world points that the
+  tracker may only refine by 8 cm.
+
+Not yet run: S2 (both eyes / parallax), the remaining IMU pace codes, S7 yaw range with the G2 worn.
