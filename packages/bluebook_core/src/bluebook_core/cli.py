@@ -3,6 +3,7 @@
     uv run bluebook bootstrap            # interactive: prereqs, .env, sample data, app deps
     uv run bluebook bootstrap --yes --api-key KEY   # non-interactive (agents / CI)
     uv run bluebook server               # same as bluebook-server
+    uv run bluebook whisper              # download the Part 1 transcription model (~3 GB, once)
 
 Run from the repo root. Re-running bootstrap is safe: it shows current values as defaults
 and keeps any .env keys it doesn't ask about.
@@ -27,6 +28,7 @@ FIELDS = [
     ("BB_DATA_DIR", "Data directory (skills, calibration, work files)", "data", False),
     ("BB_PORT", "Server port", "8787", False),
     ("BB_INTERACTIVE", "Enable experimental Part 3 AR mode? (0/1)", "0", False),
+    ("TYPESAFE_API_KEY", "TypeSafe API key (Part 3 object boxes; needed for AR mode)", "", True),
 ]
 
 
@@ -77,6 +79,23 @@ def tailscale() -> str | None:
         return None
 
 
+WHISPER = "large-v3"  # FasterWhisperBackend's default model in bluebook_perception.transcribe
+
+
+def whisper(local_only: bool = False) -> str | None:
+    """Path of the cached faster-whisper model (downloads it unless local_only), None if absent."""
+    from faster_whisper.utils import _MODELS, download_model
+
+    if not local_only:  # download_model hides the progress bar; same repo + cache, plus a README
+        from huggingface_hub import snapshot_download
+
+        return snapshot_download(_MODELS[WHISPER])
+    try:
+        return download_model(WHISPER, local_files_only=True)
+    except OSError:  # LocalEntryNotFoundError: not cached
+        return None
+
+
 def bootstrap(a: argparse.Namespace) -> int:
     if not Path("pyproject.toml").is_file() or not Path("apps/g2").is_dir():
         print("run this from the bluebook repo root", file=sys.stderr)
@@ -92,6 +111,8 @@ def bootstrap(a: argparse.Namespace) -> int:
         found = shutil.which(tool)
         print(f"  {'✓' if found else ('✗' if required else '-')} {tool:7} {why}")
         ok &= bool(found) or not required
+    w = whisper(local_only=True)
+    print(f"  {'✓' if w else '-'} whisper   {WHISPER if w else 'not cached: uv run bluebook whisper (3 GB)'}")
     host = tailscale()
     print(f"  {'✓' if host else '-'} tailscale {host or 'not running: phone camera page + packaged app need it'}")
 
@@ -144,10 +165,13 @@ def main() -> None:
     b.add_argument("--api-key", help="Gemini API key (else prompted, hidden)")
     b.add_argument("--no-check", action="store_true", help="skip the network check of the API key")
     sub.add_parser("server", help="run the dev server")
+    sub.add_parser("whisper", help=f"download the faster-whisper {WHISPER} model for Part 1 ingest (~3 GB)")
     a = p.parse_args()
     if a.cmd == "server":
         from .server import main as serve
 
         serve()
+    elif a.cmd == "whisper":
+        print(f"faster-whisper {WHISPER}: {whisper()}")
     else:
         sys.exit(bootstrap(a))

@@ -31,6 +31,7 @@ change it on a part branch. If you need a change there, stop and make a separate
 ```bash
 uv run bluebook bootstrap --yes [--api-key K]  # set up this laptop non-interactively (humans: drop --yes)
 uv sync                                   # Python workspace (uv; Python ≥3.12)
+uv run bluebook whisper                   # once: Part 1 transcription model (~3 GB)
 uv run pytest                             # all tests incl. core contract tests — must stay green
 uv run ruff check . && uv run ruff format --check .
 ./scripts/dev.sh [--sim]                  # everything on this laptop: server + glasses app + QR (+ simulator)

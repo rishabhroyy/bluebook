@@ -8,6 +8,7 @@ dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
   "google-genai>=1.30",
+  "httpx>=0.27",  # TypeSafe Jev box calls (models.box); already installed via google-genai
   "numpy>=2",
   "pillow>=11",
 ]

@@ -32,6 +32,7 @@ laptop**. Whoever's QR was scanned last is the laptop the glasses talk to, so a 
 
 | Need | How |
 |---|---|
+| Part 1 local transcription | `uv run bluebook whisper` once (~3 GB faster-whisper large-v3; otherwise it downloads on the first ingest) |
 | Prerequisites | `uv`, `pnpm`, a Gemini API key. Optional: Tailscale (same team tailnet, with HTTPS certificates turned on once in the admin console) |
 | No glasses | `--sim`: the simulator renders the 576×288 display and uses your laptop mic |
 | Scene camera, no phone | laptop webcam at `http://localhost:8787/camera?id=scene` (localhost counts as a secure context) |
