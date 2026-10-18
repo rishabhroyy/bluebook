@@ -498,7 +498,14 @@ def images(sent) -> list[tuple[str, Image.Image]]:
     return [(m["name"], Image.open(io.BytesIO(base64.b64decode(m["png_b64"])))) for m in sent if m["type"] == "image"]
 
 
-async def test_keyframe_fills_the_band_and_is_cleared_after(make, keyframed):
+async def test_steps_are_text_only(make, keyframed):
+    ctrl, conn = make(root=keyframed)
+    await to_step(ctrl, conn)
+    assert images(conn.ws.sent) == []  # s1 has a keyframe, but steps show text only
+
+
+async def test_keyframe_fills_the_band_and_is_cleared_after(make, keyframed, monkeypatch):
+    monkeypatch.setattr(teach, "SHOW_KEYFRAMES", True)
     ctrl, conn = make(root=keyframed)
     await ctrl.on_connect(conn)
     await press(ctrl, conn, "list_select")
