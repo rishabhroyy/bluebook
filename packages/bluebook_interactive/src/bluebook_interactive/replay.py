@@ -3,6 +3,7 @@ on real data instead of guessing.
 
     uv run python -m bluebook_interactive.replay --record     # capture until Ctrl-C (spoken prompts), then replay
     uv run python -m bluebook_interactive.replay data/diag/run-<time>.jsonl [--target camera] [--motion-tau 0.25 ...]
+    uv run python -m bluebook_interactive.replay --record --lesson   # record a real lesson run, print its timeline
 
 The glasses are simulated: every publish is acked one recorded draw round trip later (cycling through the recorded
 acks; the prior if there are none), so the Renderer paces itself exactly as it does live. Metrics, per face source:
@@ -241,10 +242,10 @@ def _say(text: str) -> None:
         subprocess.Popen(["say", text])
 
 
-def record() -> Path:
+def record(lesson: bool = False) -> Path:
     """Guided capture against the running server (./scripts/dev.sh with BB_INTERACTIVE=1, phone app + glasses on):
     targets the phone, speaks the SCRIPT as suggestions, records until Ctrl-C, then saves just that window of the
-    server's poses.jsonl as its own file."""
+    server's poses.jsonl as its own file. lesson: leave the targets to the lesson on the glasses, no prompts."""
     while True:
         try:
             st = _api("/interactive/status")
@@ -260,20 +261,23 @@ def record() -> Path:
         print(f"waiting for {missing} ...", flush=True)
         time.sleep(2)
     sn = sessions[0]
-    _api(f"/interactive/step/{sn}", "POST", name=PHONE)
-    _say("Recording. Press control C when you are done.")
+    if not lesson:
+        _api(f"/interactive/step/{sn}", "POST", name=PHONE)
+    _say("Recording. " + ("Run the lesson on the glasses. " if lesson else "") + "Press control C when you are done.")
     start = time.time()
     try:
-        for secs, text in SCRIPT:
+        for secs, text in [] if lesson else SCRIPT:
             _say(text)
             time.sleep(secs)
-        _say("That was all the prompts. Keep going, or press control C.")
+        if not lesson:
+            _say("That was all the prompts. Keep going, or press control C.")
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         pass
     end = time.time()
-    _api(f"/interactive/step/{sn}", "POST")
+    if not lesson:
+        _api(f"/interactive/step/{sn}", "POST")
     _say("Saved.")
     src = config.data_dir / "diag" / "poses.jsonl"
     keep = [line for line in src.read_text().splitlines() if line and start <= json.loads(line)["now"] <= end]
@@ -286,17 +290,72 @@ def record() -> Path:
     return out
 
 
+def timeline(recs: list[dict]) -> list[str]:
+    """What happened per lesson step: targets, Gemini boxes, app anchors/errors, what was drawn. Pose/IMU/acks are
+    summarised per step, everything else is one line per change."""
+    out: list[str] = []
+    t0 = recs[0]["now"] if recs else 0.0
+    n = {"pose": 0, "face": 0, "ack": 0}
+    anchors: dict[str, str] = {}
+    errors: dict[str, str] = {}
+    drawn = None
+
+    def flush() -> None:
+        if any(n.values()):
+            out.append(f"         poses {n['pose']} (face in {n['face']}), glasses draw acks {n['ack']}")
+        n.update(pose=0, face=0, ack=0)
+
+    for r in recs:
+        k, d, at = r["k"], r["d"], f"{r['now'] - t0:7.1f}s"
+        if k == "step":
+            flush()
+            names = ", ".join(f"{t['object_id']} ({t['name']})" for t in d["targets"]) or "none"
+            out.append(f"{at} STEP {d['skill_id']}/{d['step_id']}  targets: {names}")
+        elif k == "ground":
+            res = d.get("error") or (f"box {[round(v, 2) for v in d['box']]}" if d.get("box") else "NOT FOUND")
+            out.append(f"{at}   gemini {d['object_id']}: {res}  ({d['s']} s)")
+        elif k == "locate":
+            out.append(f"{at}   locate sent to app: {d['id']}")
+        elif k == "pose":
+            n["pose"] += 1
+            n["face"] += d.get("face") is not None
+            new = {a["id"]: a.get("how", "") for a in d.get("anchors") or []}
+            for oid in new.keys() - anchors.keys() - {PHONE}:
+                out.append(f"{at}   app anchor placed: {oid} ({new[oid]})")
+            for oid in anchors.keys() - new.keys() - {PHONE}:
+                out.append(f"{at}   app anchor gone: {oid}")
+            if d.get("anchors") is not None:
+                anchors = new
+            for oid, why in (d.get("errors") or {}).items():
+                if errors.get(oid) != why:
+                    out.append(f"{at}   app error {oid}: {why}")
+            errors.update(d.get("errors") or {})
+        elif k == "ack":
+            n["ack"] += 1
+        elif k == "overlay":
+            kinds = ",".join(sorted({p["kind"] for p in d["prims"]})) or "nothing"
+            if kinds != drawn:
+                out.append(f"{at}   drawing: {kinds}")
+                drawn = kinds
+    flush()
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("path", type=Path, nargs="?", default=Path("data/diag/poses.jsonl"))
     ap.add_argument("--record", action="store_true", help="record until Ctrl-C first (needs the running server)")
     ap.add_argument("--target", default=PHONE, help="object id to highlight (default: the phone)")
+    ap.add_argument("--lesson", action="store_true", help="a lesson run: print its per-step timeline, no replay")
     ap.add_argument("--motion-tau", type=float)
     for c in ("SWAY_DEG_S", "TURN_DEG_S", "K_SIGMA", "SETTLE_TICKS"):
         ap.add_argument(f"--{c.lower().replace('_', '-')}", type=float, dest=c)
     a = ap.parse_args()
     consts = {c: v for c in ("SWAY_DEG_S", "TURN_DEG_S", "K_SIGMA", "SETTLE_TICKS") if (v := getattr(a, c)) is not None}
-    path = record() if a.record else a.path
+    path = record(a.lesson) if a.record else a.path
+    if a.lesson:
+        print("\n".join(timeline(load(path))))
+        return
     head = {"motion_tau": a.motion_tau} if a.motion_tau is not None else None
     print(json.dumps(replay(load(path), a.target, head, **consts), indent=2))
 

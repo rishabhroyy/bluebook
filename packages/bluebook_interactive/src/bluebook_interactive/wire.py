@@ -22,7 +22,7 @@ F = Annotated[float, Field(allow_inf_nan=False)]
 class PoseHello(BaseModel):
     type: Literal["pose_hello"]
     camera_id: str = CAM
-    source: Literal["arkit", "arkit-world", "vision"]
+    source: Literal["arkit", "arkit-world", "arkit-world-front", "vision"]
     device: str = ""
 
 

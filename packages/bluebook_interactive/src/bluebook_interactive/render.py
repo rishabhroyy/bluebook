@@ -153,6 +153,7 @@ class Renderer:
 
     def _publish(self, prims: list[Primitive], now: float, wait_ack: bool = True) -> None:
         hub.publish(OverlayFrame(session=self.session, t=now, primitives=prims))
+        self.tk.recorder.write("overlay", now, {"session": self.session, "prims": [p.model_dump() for p in prims]})
         if wait_ack and prims != self.shown:
             self.inflight = now
         self.shown, self.pub_t = prims, now

@@ -49,7 +49,7 @@ struct Coupling {
 }
 
 /// One Vision object tracker per anchor id, on its own serial queue, <= 15 Hz overall per id, skipped while busy.
-/// Each good result re-samples LiDAR in the tracked box. Never blocks the ARKit delegate.
+/// Each good result re-samples depth (LiDAR or TrueDepth) in the tracked box. Never blocks the ARKit delegate.
 final class ObjectTracker: @unchecked Sendable {
     struct Result: Sendable {
         var id: String; var box: CGRect  // top-left normalised
@@ -81,7 +81,7 @@ final class ObjectTracker: @unchecked Sendable {
     func stop(_ id: String) { lock.withLock { items[id] = nil } }
     func stopAll() { lock.withLock { items = [:] } }
 
-    func submit(pb: CVPixelBuffer, depth: ARDepthData?, K: Intrinsics, camT: simd_float4x4, t: Double) {
+    func submit(pb: CVPixelBuffer, depth: DepthSource?, K: Intrinsics, camT: simd_float4x4, t: Double) {
         let due: [(String, Item, VNDetectedObjectObservation)] = lock.withLock {
             items.compactMap { id, it in
                 guard !it.busy, t - it.lastStart >= minInterval else { return nil }
@@ -118,4 +118,4 @@ final class ObjectTracker: @unchecked Sendable {
     }
 }
 
-struct DepthBox: @unchecked Sendable { let depth: ARDepthData?; init(_ d: ARDepthData?) { depth = d } }
+struct DepthBox: @unchecked Sendable { let depth: DepthSource?; init(_ d: DepthSource?) { depth = d } }

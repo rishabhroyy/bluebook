@@ -182,3 +182,38 @@ def test_compositor_orders_new_content_first_and_stamps_t():
     moved = comp.update(page, on_right)
     assert [m.name for m in moved] == ["img_r", "img_l"]  # new content first, cleared tile last
     assert moved[0].t is None
+
+
+def test_models_box_parses_jev_and_sizes_images_for_it():
+    import asyncio
+    import io
+    import json
+
+    import httpx
+    from bluebook_core import models
+    from PIL import Image
+
+    sent = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = req.read()
+        start = body.index(b"{")
+        sent.append(json.loads(body[start : body.index(b"\r\n--", start)]))
+        box = {"type": "box", "box": {"top": 0.2, "bottom": 0.6, "left": 0.1, "right": 0.5}, "confidence": 0.8}
+        return httpx.Response(200, json={"answers": {"box": box}})
+
+    buf = io.BytesIO()
+    Image.new("RGB", (100, 50)).save(buf, "JPEG")  # below Jev's 280 px minimum: must be resized/padded before sending
+    models._ts = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        got = asyncio.run(models.box("boxer", buf.getvalue(), "the mug in `frame` like `ref0`", [buf.getvalue()]))
+    finally:
+        models._ts = None
+    assert got == ((0.1, 0.2, 0.5, 0.6), 0.8)
+    assert sent[0]["model"] == models.model_id("boxer") and sent[0]["state"] == {"frame": "f", "ref0": "r0"}
+    assert set(sent[0]["assets"]) == {"f", "r0"} and sent[0]["questions"]["box"]["instructions"].startswith("the mug")
+    for w, h in [(100, 50), (40, 900), (3000, 2000)]:  # tiny, thin (stretching would overflow 1568), huge
+        b = io.BytesIO()
+        Image.new("RGB", (w, h)).save(b, "JPEG")
+        im = Image.open(io.BytesIO(models._jev_image(b.getvalue())))
+        assert 280 <= min(im.size) and max(im.size) <= 1568 and im.width * im.height >= 78_400, (w, h, im.size)

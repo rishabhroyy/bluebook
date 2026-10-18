@@ -641,60 +641,69 @@ class FakeApp:
         self.sent.append(json.loads(s))
 
 
-def test_locate_flow_grounds_then_uses_the_apps_anchor(tmp_path, monkeypatch):
+def test_consensus_needs_two_agreeing_boxes():
+    from bluebook_interactive.targets import consensus
+
+    a, a2, far = (0.2, 0.3, 0.4, 0.5), (0.21, 0.3, 0.41, 0.52), (0.7, 0.7, 0.8, 0.8)
+    assert consensus([a]) is None and consensus([a, far]) is None
+    got = consensus([far, a, a2])
+    assert got is not None and abs(got[0] - 0.205) < 1e-9 and abs(got[3] - 0.51) < 1e-9
+
+
+def test_locate_flow_votes_then_uses_the_apps_anchor_and_keeps_it_across_steps(tmp_path, monkeypatch):
     import asyncio
 
     from bluebook_core.protocol import CameraFrame
     from bluebook_interactive import targets as T
 
-    calls = []
+    calls, boxes = (
+        [],
+        [(0.7, 0.7, 0.8, 0.8), (0.2, 0.3, 0.4, 0.5), (0.2, 0.3, 0.4, 0.5)],
+    )  # one stray miss, then agreement
 
     async def fake_ground(jpeg, tg, ex=()):
         calls.append(tg.name)
-        return (0.2, 0.3, 0.4, 0.5)
+        return boxes[min(len(calls) - 1, len(boxes) - 1)]
 
     monkeypatch.setattr(T.vision, "ground", fake_ground)
-    monkeypatch.setattr(T.vision, "exemplars", lambda *a, **k: [])
+    frame = lambda: hub.publish(CameraFrame(session="scene", t=time.time(), jpeg=b"x", width=10, height=10))
+
+    async def wait(cond):
+        for _ in range(200):
+            if cond():
+                return
+            frame()  # constantly looking: only NEW frames are grounded
+            await asyncio.sleep(0.02)
+        raise AssertionError("timed out")
 
     async def go():
         tk = Tracker(tmp_path)
         tk.app = app = FakeApp()
         tk.hello = PoseHello(type="pose_hello", source="arkit-world")
-        hub.publish(CameraFrame(session="scene", t=time.time(), jpeg=b"x", width=10, height=10))
         mug = StepTarget(object_id="mug", name="mug")
         await tk.targets.on_step(StepChanged(session="s", skill_id="x", step_id="a", targets=[mug]))
         task = asyncio.create_task(tk.targets.ground_loop())
-        for _ in range(100):
-            if app.sent:
-                break
-            await asyncio.sleep(0.02)
-        assert app.sent == [{"type": "locate", "id": "mug", "box": [0.2, 0.3, 0.4, 0.5]}]
+        await wait(lambda: app.sent)
+        assert app.sent == [{"type": "locate", "id": "mug", "box": [0.2, 0.3, 0.4, 0.5]}] and len(calls) == 3
         assert tk.targets.resolve("s", 0, None, None) == [] and tk.status()["locate"]["pending"] == ["mug"]
-        await asyncio.sleep(1.3)  # another loop pass: a pending locate is not re-sent, and Gemini is not re-asked
-        assert len(app.sent) == 1 and calls == ["mug"]
         cam = {"id": "camera", "p": [0, 1, 0], "how": "camera"}
         m = PoseMsg.model_validate({**world_pose(np.eye(3), [0, 1, 1], [cam, {"id": "mug", "p": [1, 2, 3]}]), "t": 1})
         tk.on_pose(m, 1.0)
         ((oid, X),) = tk.targets.resolve("s", 0, None, None)
         assert oid == "mug" and X.tolist() == [1, 2, 3] and not tk.targets.pending
-        await asyncio.sleep(1.3)
-        assert len(app.sent) == 1  # placed anchor is trusted: not moved again within RELOCATE_S
-        # the app reports it could not place it: ground again, from a fresh frame
-        tk.on_pose(PoseMsg.model_validate({**m.model_dump(), "errors": {"mug": "moved"}}), 2.0)
-        tk.on_pose(m, 2.05)  # the app sends each error once: it must stick until the next pass sees it
-        tk.targets.located["mug"] -= T.ERROR_RETRY_S
-        tk.targets._tried_w.clear()
-        for _ in range(100):
-            if len(app.sent) > 1:
-                break
-            await asyncio.sleep(0.02)
-        assert app.sent[1]["type"] == "locate" and calls == ["mug", "mug"]
+        n = len(calls)
+        await wait(lambda: len(calls) > n + 1)  # still watching it...
+        assert len(app.sent) == 1  # ...but the same agreed box is not re-sent: a placed anchor is trusted
+        # the app could not place it again (e.g. no depth): the next agreed box is sent at once, no pending wait
+        tk.on_pose(PoseMsg.model_validate({**m.model_dump(), "errors": {"mug": "no depth"}}), 2.0)
+        await wait(lambda: len(app.sent) > 1)
+        assert app.sent[1]["type"] == "locate"
         moved = {"id": "mug", "p": [1.0, 2.0, 2.5]}
         tk.on_pose(PoseMsg.model_validate({**world_pose(np.eye(3), [0, 1, 1], [cam, moved]), "t": 3}), 3.0)
         assert "mug" not in tk.targets.errors and not tk.targets.pending  # re-placed: error cleared
-        # next step: what we placed is forgotten
-        await tk.targets.on_step(StepChanged(session="s", skill_id="x", step_id="b", targets=[]))
-        assert app.sent[-1] == {"type": "forget", "id": "mug"} and "mug" not in tk.targets.world_anchors
+        # next step: the anchor is kept (objects stay put between steps)
+        await tk.targets.on_step(StepChanged(session="s", skill_id="x", step_id="b", targets=[mug]))
+        assert {"type": "forget", "id": "mug"} not in app.sent and "mug" in tk.targets.world_anchors
         task.cancel()
 
     asyncio.run(go())
@@ -849,14 +858,11 @@ def test_world_face_memory_follows_imu_pitch_roll_then_times_out(tmp_path, sign)
     heading = lambda R: math.degrees(math.atan2((R @ [0, 0, 1])[0], (R @ [0, 0, 1])[2]))
     assert abs(heading(held.R) - heading(R0)) < 8.0  # ...yaw kept (minimal rotation)
     np.testing.assert_allclose(held.p, tk.head.p)
-    while w.now < t_lost + 2.9:
+    while w.now < t_lost + 120:  # looking down at the work for minutes: the IMU memory never runs out
         w.now += 0.1
         w.imu(new)
-    assert tk.memory("s", w.now) is not None
-    while w.now < t_lost + 3.2:
-        w.now += 0.1
-        w.imu(new)
-    assert tk.memory("s", w.now) is None and not tk.status()["face_memory"]["active"]  # MEMORY_S is over
+    held, mode = tk.memory("s", w.now)
+    assert mode == "imu" and gravity_angle(held.R, wh(*new)) < 3.0
 
 
 def test_imu_blend_removes_most_of_a_noisy_cameras_tilt_error_and_keeps_yaw(tmp_path):
@@ -1045,3 +1051,28 @@ def test_imu_is_only_switched_off_by_us_after_we_switched_it_on(tmp_path):
             t.cancel()
 
     asyncio.run(go())
+
+
+def test_lesson_timeline_reports_each_link_of_the_chain():
+    from bluebook_interactive.replay import timeline
+
+    tg = {"object_id": "sd_card", "name": "SD card"}
+    recs = [
+        {"k": "step", "now": 0.0, "d": {"skill_id": "k", "step_id": "s3", "targets": [tg]}},
+        {"k": "ground", "now": 1.0, "d": {"object_id": "sd_card", "box": None, "s": 1.2}},
+        {"k": "pose", "now": 1.5, "d": {"face": {}, "anchors": [{"id": "sd_card", "how": "lidar"}]}},
+        {"k": "pose", "now": 1.6, "d": {"face": None, "anchors": [], "errors": {"sd_card": "no depth"}}},
+        {"k": "overlay", "now": 2.0, "d": {"prims": [{"kind": "ring"}]}},
+        {"k": "ack", "now": 2.1, "d": {}},
+    ]
+    out = "\n".join(timeline(recs))
+    for want in (
+        "STEP k/s3",
+        "sd_card: NOT FOUND",
+        "anchor placed: sd_card",
+        "anchor gone: sd_card",
+        "error sd_card: no depth",
+        "drawing: ring",
+        "poses 2 (face in 1), glasses draw acks 1",
+    ):
+        assert want in out, (want, out)

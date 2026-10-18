@@ -72,7 +72,7 @@ struct GlassesPanel: View {
             if p.appConnected == false {
                 chip("iphone.slash", "phone app offline", .orange)
             } else {
-                chip("camera.metering.center.weighted", p.source == "arkit" ? "ARKit" : (p.source == "arkit-world" ? "World" : (p.source?.capitalized ?? "—")))
+                chip("camera.metering.center.weighted", p.source == "arkit" ? "ARKit" : (p.source?.hasPrefix("arkit-world") == true ? "World" : (p.source?.capitalized ?? "—")))
                 chip("speedometer", String(format: "%.0f Hz", p.hz ?? 0))
                 chip(p.headOk == true ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
                      p.headOk == true ? "head" : "head lost", p.headOk == true ? .green : .orange)

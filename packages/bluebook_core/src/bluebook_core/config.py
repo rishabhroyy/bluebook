@@ -33,7 +33,7 @@ class Models:
     synthesizer: str = _env("BB_MODEL_SYNTH", "gemini-3.8-flash")  # Part 1: FAQ/safety/consistency passes
     tutor: str = _env("BB_MODEL_TUTOR", "gemini-3.8-flash")  # Part 2: conversation + audio questions
     scene: str = _env("BB_MODEL_SCENE", "gemini-3.5-flash-lite")  # Part 2: periodic scene checks (cheap, frequent)
-    detector: str = _env("BB_MODEL_DETECT", "gemini-3.8-flash")  # Part 3: box_2d grounding
+    boxer: str = _env("BB_MODEL_BOX", "jev-preview")  # Part 3: TypeSafe Jev Box grounding (needs TYPESAFE_API_KEY)
     embedder: str = _env("BB_MODEL_EMBED", "gemini-embedding-2-preview")  # multimodal; all parts
 
 
@@ -43,6 +43,7 @@ class Config:
     port: int = int(_env("BB_PORT", "8787"))
     data_dir: Path = Path(_env("BB_DATA_DIR", "data"))
     google_api_key: str = _env("GEMINI_API_KEY", "")
+    typesafe_api_key: str = _env("TYPESAFE_API_KEY", "")  # Part 3 object boxes (Jev); required when BB_INTERACTIVE=1
     interactive: bool = _env("BB_INTERACTIVE", "0") == "1"  # enable Part 3
     models: Models = field(default_factory=Models)
 

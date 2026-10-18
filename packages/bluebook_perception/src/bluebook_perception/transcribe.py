@@ -75,6 +75,7 @@ class FasterWhisperBackend(Transcriber):
             word_timestamps=True,
             vad_filter=True,
             language="en",
+            log_progress=True,  # tqdm bar over audio seconds, on stderr
         )
         out: list[TranscriptSegment] = []
         for seg in segments:

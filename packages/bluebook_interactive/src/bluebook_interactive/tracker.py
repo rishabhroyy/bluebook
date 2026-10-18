@@ -43,13 +43,18 @@ MIN_FACE_Z = 0.05  # m; a face closer than this is a tracker failure
 ZERO = np.zeros(3)
 MX = np.diag([-1.0, 1.0, 1.0])
 WORLD = "arkit-world"  # pose source: head pose + anchors in one gravity-aligned ARKit world frame
+WORLD_FRONT = "arkit-world-front"  # the same, with the FRONT camera's image (ARFaceTrackingConfiguration + world)
 # Pose sources whose head x axis is mirrored (see Tracker.mirror). The face-only "arkit" mode is known to be; the
 # world mode is raw ARKit and UNKNOWN until verified on hardware: flip with POST /interactive/mirror.
-MIRROR_SOURCES = {"arkit"}
+# The front world mode runs the same ARKit face configuration as "arkit" and its chevron came out left-right inverted on
+# hardware (owner, 2026-10-18), so it is mirrored too; unverified otherwise, flip live with POST /interactive/mirror.
+MIRROR_SOURCES = {"arkit", WORLD_FRONT}
 # Face memory: when the face is lost keep drawing from the last good pose, this long (counted from the last face
-# pose). Priors: ~3 s is about how long a wearer looks down at the work / turns away before looking back; without a
-# live IMU the held pose cannot follow the head, so it is trusted for much less.
-MEMORY_S, MEMORY_HOLD_S = 3.0, 1.0
+# pose). With a live IMU, pitch/roll follow the head (gravity is absolute: no drift) and only yaw/position are held,
+# which stay right while the wearer looks down at the work without turning. Measured 2026-10-18 (rear camera, 1.9 m):
+# looking down loses the face for up to 21 s, 12 gaps > 3 s in 10 min, so the IMU memory never runs out (owner's call).
+# Without a live IMU the held pose cannot follow the head, so it is trusted for much less.
+MEMORY_S, MEMORY_HOLD_S = math.inf, 1.0
 MEM_SIG_DEG_PER_S = 3.0  # held pose: assumed yaw drift (unobservable without the face), grows the pose's sigma
 IMU_MAX_HEAD_DEG_S = 15.0  # only pair IMU with head gravity when the head is slow: pose/IMU timing skew ~0.1 s
 # IMU tilt blend (world mode): the G2 IMU's gravity gives pitch/roll far cleaner than rear-camera Vision (2-3 deg per
@@ -95,6 +100,7 @@ class Tracker:
         self.pose_times: deque[float] = deque(maxlen=30)
         self.variant, self.variant_err = "as sent", dict.fromkeys(VARIANTS, 0.0)  # EMA disagreement, degrees
         self.targets = Targets(self.to_app, lambda: self.world)
+        self.targets.rec = lambda kind, d: self.recorder.write(kind, self.clock(), d)
         self.mirror_sources = set(MIRROR_SOURCES)
         self.imu_calib: dict[str, ImuCalib] = {}
         self.displays: dict[str, Display] = {}
@@ -149,7 +155,7 @@ class Tracker:
 
     @property
     def world(self) -> bool:
-        return self.source == WORLD
+        return self.source in (WORLD, WORLD_FRONT)
 
     @property
     def head_z(self) -> float | None:
@@ -279,6 +285,7 @@ class Tracker:
     async def _steps_loop(self) -> None:
         async for ev in hub.subscribe(StepChanged):
             s = ev.session
+            self.recorder.write("step", self.clock(), ev.model_dump())
             await self.targets.on_step(ev)
             r = self.renderer(s)
             if ev.targets:
@@ -377,7 +384,7 @@ class Tracker:
         return {
             "active": active,
             "age_s": round(age, 2) if lost and age < 3600 else None,
-            "limit_s": lim,
+            "limit_s": lim if math.isfinite(lim) else None,  # None = no limit (JSON has no inf)
             "mode": ("imu" if lim == MEMORY_S else "hold") if active else None,
         }
 

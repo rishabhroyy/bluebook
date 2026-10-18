@@ -26,6 +26,7 @@ final class Rig: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, ARSessi
     private var loggedZoom = false
     let world: WorldEngine
     nonisolated(unsafe) private var worldMode = false  // written on sessionQueue, read on the delegate queue
+    nonisolated(unsafe) private var frontWorld = false  // world mode on the FRONT camera image (same queues as worldMode)
     private let log = Logger(subsystem: "com.rishabhroy.bluebook.camera", category: "ar")
     /// Surfaced in the UI: interruptions / failures / lost tracking (nil = fine). Called on the pipeline queue.
     var onStatus: (@Sendable (String?) -> Void)?
@@ -104,6 +105,26 @@ final class Rig: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, ARSessi
     }
 
     static var worldSupported: Bool { ARWorldTrackingConfiguration.isSupported && ARWorldTrackingConfiguration.supportsUserFaceTracking }
+    static var frontWorldSupported: Bool { ARFaceTrackingConfiguration.isSupported && ARFaceTrackingConfiguration.supportsWorldTracking }
+
+    /// World mode on the front camera: the image, face and depth (TrueDepth) are the front camera's, and ARKit still
+    /// tracks the phone in a gravity-aligned world frame (rear camera), so head, phone and objects stay world points.
+    /// No LiDAR, mesh, plane raycasts or world maps; a swap restarts tracking, so objects are located again.
+    func startFrontWorld() {
+        sessionQueue.async { [self] in
+            if capture.isRunning { capture.stopRunning() }
+            device = nil
+            let c = ARFaceTrackingConfiguration()
+            c.maximumNumberOfTrackedFaces = 1
+            c.isWorldTrackingEnabled = true
+            c.worldAlignment = .gravity
+            log.info("front world format \(c.videoFormat.imageResolution.width, privacy: .public)x\(c.videoFormat.imageResolution.height, privacy: .public) @\(c.videoFormat.framesPerSecond, privacy: .public)")
+            lastConfig = c
+            pipeline.queue.sync { world.reset(meshOn: false, savedHow: [:], raycast: false); faceBook.reset(); faceSel.reset(); rearFace.reset(); fpsStart = 0; fps = 0 }
+            worldMode = true; frontWorld = true
+            ar.run(c, options: [.resetTracking, .removeExistingAnchors])
+        }
+    }
 
     /// Rear-camera world tracking + front-camera user face tracking + LiDAR depth/mesh where available.
     func startWorld(restore: Bool) {
@@ -126,6 +147,7 @@ final class Rig: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, ARSessi
             c.worldAlignment = .gravity
             var how: [String: String] = [:]
             if restore, let saved = WorldStore.load() { c.initialWorldMap = saved.map; how = saved.how }
+            frontWorld = false
             lastConfig = c
             pipeline.queue.sync { world.reset(meshOn: mesh, savedHow: how); faceBook.reset(); faceSel.reset(); rearFace.reset(); fpsStart = 0; fps = 0 }
             worldMode = true
@@ -135,8 +157,12 @@ final class Rig: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, ARSessi
 
     /// Video format for world tracking. No ARKit API reports which formats support user face tracking, so use the one the
     /// front camera is known to run alongside: the rear WIDE camera (never ultra-wide / tele, which can starve the TrueDepth
-    /// stream). Keep the system default when it is already wide; otherwise the largest wide format.
+    /// stream). Prefer ARKit's 4K wide format: 2x the pixels on the wearer's face for the rear Vision path (at ~1.9 m the
+    /// face is ~130 px wide at the default format and its yaw is ~4 deg noisy per frame). Else the system default when
+    /// it is already wide; otherwise the largest wide format.
     static func worldFormat() -> ARWorldTrackingConfiguration.VideoFormat {
+        if let k4 = ARWorldTrackingConfiguration.recommendedVideoFormatFor4KResolution,
+           k4.captureDeviceType == .builtInWideAngleCamera { return k4 }
         let def = ARWorldTrackingConfiguration().videoFormat
         if def.captureDeviceType == .builtInWideAngleCamera { return def }
         return ARWorldTrackingConfiguration.supportedVideoFormats
@@ -210,10 +236,14 @@ final class Rig: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, ARSessi
         var src: FaceSrc?
         if worldMode {
             frontHead = face.map { Geo.worldHead(faceT: $0.transform, leftEye: $0.leftEyeTransform, rightEye: $0.rightEyeTransform) }
-            let rear = rearFace.fresh(now: now)
-            src = faceSel.update(frontTracked: face != nil, rearAvailable: rear != nil)
-            if faceSel.wantsRear { rearFace.submit(frame, ipd: Settings.ipd) }
-            if src == .rear { frontHead = rear }
+            if frontWorld {
+                src = face != nil ? .front : nil  // the image is the front camera's: no rear Vision fallback
+            } else {
+                let rear = rearFace.fresh(now: now)
+                src = faceSel.update(frontTracked: face != nil, rearAvailable: rear != nil)
+                if faceSel.wantsRear { rearFace.submit(frame, ipd: Settings.ipd) }
+                if src == .rear { frontHead = rear }
+            }
         }
         // The face anchor is front-camera based and independent of world tracking quality: it is sent even while world
         // tracking is limited (ar.tracking tells the server world-frame positions may be degraded).
@@ -299,8 +329,15 @@ enum PoseMode: String, CaseIterable, Sendable { case world, face, vision }
 @MainActor @Observable
 final class CameraModel {
     var running = false
-    /// Vision mode only: which physical camera. (World = rear + user-face front; Face = front.)
-    var front = false { didSet { if oldValue != front, mode == .vision { cameraChanged() } } }
+    /// Which camera's image: Vision mode picks the physical camera; World mode swaps rear (LiDAR, front face pose only)
+    /// for front (front image + TrueDepth, still world-tracked). Face mode is always front.
+    var front = true {  // owner: start on the front camera
+        didSet {
+            guard oldValue != front else { return }
+            if mode == .vision { cameraChanged() } else if mode == .world, running { apply() }
+        }
+    }
+    let frontWorldSupported = Rig.frontWorldSupported
     var mode: PoseMode {
         didSet {
             guard oldValue != mode else { return }
@@ -312,7 +349,7 @@ final class CameraModel {
     let worldSupported = Rig.worldSupported
     var hasSavedScene: Bool { WorldStore.exists }
     /// Preview is mirrored like a selfie only for the front camera.
-    var mirrored: Bool { mode == .face || (mode == .vision && front) }
+    var mirrored: Bool { mode == .face || (mode != .face && front && (mode == .vision || frontWorldSupported)) }
     var lenses: [Lens] = []
     var lens: Lens? { didSet { if oldValue != lens { zoom = 1; if running { apply() } } } }
     var zoom = 1.0 { didSet { rig.setZoom(zoom) } }
@@ -429,7 +466,10 @@ final class CameraModel {
         var model = "iPhone"
         var u = utsname(); uname(&u)
         withUnsafeBytes(of: &u.machine) { model = String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
-        if mode == .world {
+        if mode == .world, front, frontWorldSupported {
+            pipeline.configure(source: .worldFront, device: "\(model) front world+truedepth", server: server)
+            rig.startFrontWorld()
+        } else if mode == .world {
             pipeline.configure(source: .world, device: "\(model) rear world+lidar", server: server)
             rig.startWorld(restore: restoreScene)
         } else if mode == .face {
