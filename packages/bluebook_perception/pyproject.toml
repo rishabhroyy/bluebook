@@ -3,7 +3,10 @@ name = "bluebook-perception"
 version = "0.1.0"
 description = "Part 1: video+audio -> SkillPackage"
 requires-python = ">=3.12"
-dependencies = ["bluebook-core"]
+# faster-whisper: local word-level transcription (stage 2). mlx-whisper from the brief is Apple-only;
+# faster-whisper runs on Windows/Linux/mac (CPU or CUDA). Gemini is the fallback backend, via core.
+# av: pinned <19 — av 19 drops metadata_errors kwarg support on Python 3.14 (Cython compat issue)
+dependencies = ["bluebook-core", "faster-whisper>=1.0", "av>=14.0,<19", "python-multipart>=0.0.12"]
 
 [project.scripts]
 bluebook-ingest = "bluebook_perception.cli:main"
