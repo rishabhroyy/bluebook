@@ -107,7 +107,17 @@ async function handle(msg: ServerMsg) {
         containerID: msg.id, containerName: msg.name, imageData: b64ToBytes(msg.png_b64),
       })))
     case 'control':
+      // Server-driven utterance: on G2 hardware the long-press START never reaches apps (only the release
+      // does), so a controller can open and close the mic itself, e.g. swipe to ask, tap to send.
+      if (msg.mic === true && !talking) {
+        talking = crypto.randomUUID()
+        send({ type: 'audio_start', utterance: talking })
+      }
       if (msg.mic != null) await bridge.audioControl(msg.mic, AudioInputSource.Glasses)
+      if (msg.mic === false && talking) {
+        send({ type: 'audio_end', utterance: talking })
+        talking = null
+      }
       if (msg.imu_pace != null) await bridge.imuControl(msg.imu_pace > 0, msg.imu_pace || undefined)
       if (msg.exit) await bridge.shutDownPageContainer(1)
       return
