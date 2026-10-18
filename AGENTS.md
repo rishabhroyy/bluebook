@@ -38,6 +38,7 @@ uv run ruff check . && uv run ruff format --check .
 uv run bluebook-server                    # just the server, on 127.0.0.1:8787
 uv run python scripts/gen_contracts.py    # after any protocol/skill model change (main only)
 cd apps/g2 && pnpm dev                    # glasses app only (dev.sh does this); `pnpm sim` simulator
+uv run bluebook pack [--origin URL]       # .ehpk for Even Hub beta/store upload (apps/g2/STORE.md)
 ```
 
 ## Running and testing (every laptop is independent)
