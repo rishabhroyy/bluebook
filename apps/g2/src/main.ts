@@ -34,6 +34,9 @@ const log = (s: string) => {
 let bridge: EvenAppBridge
 let ws: WebSocket | null = null
 let startupTried = false // createStartUpPageContainer is one-shot per session (see handle)
+// crypto.randomUUID exists only in secure contexts; the dev sideload is plain http://<tailnet-ip>:5173,
+// where it is undefined in the Even app's WebView (measured on G2, 2026-10-17). Ids only need to be unique per app.
+const uid = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
 let talking: string | null = null // utterance id while push-to-talk is held
 
 // ------------------------------------------------------------------ rendering
@@ -157,7 +160,7 @@ function onEvent(ev: EvenHubEvent) {
   if (!kind) return
   // Long press is push-to-talk on every screen (contract, see DESIGN §6.2).
   if (kind === 'long_press' && !talking) {
-    talking = crypto.randomUUID()
+    talking = uid()
     send({ type: 'audio_start', utterance: talking })
     void bridge.audioControl(true, AudioInputSource.Glasses)
   } else if (kind === 'long_press_release' && talking) {
@@ -184,7 +187,7 @@ async function deviceInfo(): Promise<Record<string, unknown>> {
   if (!device.sn) {
     let id = await bridge.getLocalStorage('bb_device_id').catch(() => '')
     if (!id) {
-      id = `phone-${crypto.randomUUID().slice(0, 8)}`
+      id = `phone-${uid().slice(0, 8)}`
       await bridge.setLocalStorage('bb_device_id', id).catch(() => false)
     }
     device.sn = id
