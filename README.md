@@ -42,6 +42,43 @@ laptop**. Whoever's QR was scanned last is the laptop the glasses talk to, so a 
 
 The glasses run `EchoController`, which echoes your input back to you, until Part 2 is merged.
 
+## Part 3 (AR highlights): the iPhone app
+
+Part 3 is experimental and off by default. It uses a native iPhone app, `apps/camera-ios/`, as the scene
+camera and dev console: ARKit world tracking on the rear camera + LiDAR, plus front TrueDepth face
+tracking for the wearer's head pose.
+
+| Need | How |
+|---|---|
+| Prerequisites | Xcode, `brew install xcodegen`, an iPhone with LiDAR and TrueDepth (Pro models), an Apple developer team (set `DEVELOPMENT_TEAM` in `apps/camera-ios/project.yml`), Developer Mode on the phone |
+| Enable on the server | `uv run bluebook bootstrap` and answer yes to the AR question (sets `BB_INTERACTIVE=1`), then restart `./scripts/dev.sh` |
+| Find your phone's id | plug it in, unlock, trust, then `xcrun devicectl list devices` (the Identifier column is `<UDID>`) |
+| Build + install | see below |
+| Point the app at your laptop | in the app: gear, then the server URL `./scripts/dev.sh` prints (`https://<your-laptop>.<tailnet>.ts.net`; an `http://<lan-ip>:8787` URL works on the same Wi-Fi), then Start. Allow Camera and Local Network |
+
+```bash
+cd apps/camera-ios && xcodegen
+xcodebuild -scheme BluebookCamera -destination 'id=<UDID>' -allowProvisioningUpdates -derivedDataPath build build
+xcrun devicectl device install app --device <UDID> build/Build/Products/Debug-iphoneos/BluebookCamera.app
+```
+
+First launch: trust the developer in Settings > General > VPN & Device Management. More in
+`apps/camera-ios/README.md`.
+
+Try a highlight with the glasses connected (the session is the glasses' serial number; see `/interactive/status`):
+
+```bash
+curl -X POST "http://localhost:8787/interactive/step/<session>?name=camera"        # test target: the phone's own lens
+curl -X POST "http://localhost:8787/interactive/step/<session>?name=hydro%20flask" # Gemini finds it in the phone's view
+curl -X POST "http://localhost:8787/interactive/step/<session>?anchor=tapped&name=thing"  # after tapping the preview
+curl -X POST "http://localhost:8787/interactive/step/<session>"                    # clear
+```
+
+`http://localhost:8787/interactive/status` shows tracking and the full projection chain. Each server
+run records the raw session to `data/diag/poses.jsonl` (overwritten at start); replay it with
+`uv run python -m bluebook_interactive.replay data/diag/poses.jsonl` to tune offline. To capture a fresh run
+(spoken prompts, until Ctrl-C) and print jitter/lag metrics: `uv run python -m bluebook_interactive.replay --record`.
+
 ```bash
 uv run pytest && (cd apps/g2 && pnpm build)   # checks
 ```
