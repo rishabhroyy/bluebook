@@ -35,6 +35,7 @@ let bridge: EvenAppBridge
 let ws: WebSocket | null = null
 let pageCreated = false
 let talking: string | null = null // utterance id while push-to-talk is held
+let pcm = { chunks: 0, bytes: 0 } // mic diagnostics for the debug log (what actually reached the WebView)
 
 // ------------------------------------------------------------------ rendering
 
@@ -108,7 +109,9 @@ async function handle(msg: ServerMsg) {
         talking = crypto.randomUUID()
         send({ type: 'audio_start', utterance: talking })
       }
-      if (msg.mic != null) await bridge.audioControl(msg.mic, AudioInputSource.Glasses)
+      if (msg.mic === true) pcm = { chunks: 0, bytes: 0 }
+      if (msg.mic != null) log(`mic ${msg.mic ? 'on' : 'off'}: ${await bridge.audioControl(msg.mic, AudioInputSource.Glasses)}`)
+      if (msg.mic === false) log(`mic got ${pcm.chunks} chunks, ${pcm.bytes} bytes`)
       if (msg.mic === false && talking) {
         send({ type: 'audio_end', utterance: talking })
         talking = null
@@ -134,6 +137,8 @@ const SOURCE: Record<number, Input['source']> = {
 
 function onEvent(ev: EvenHubEvent) {
   if (ev.audioEvent) {
+    pcm.chunks++
+    pcm.bytes += ev.audioEvent.audioPcm?.byteLength ?? 0
     if (talking && ws?.readyState === WebSocket.OPEN) ws.send(ev.audioEvent.audioPcm)
     return
   }
