@@ -33,8 +33,12 @@ const log = (s: string) => {
 
 let bridge: EvenAppBridge
 let ws: WebSocket | null = null
-let pageCreated = false
+let startupTried = false // createStartUpPageContainer is one-shot per session (see handle)
+// crypto.randomUUID exists only in secure contexts; the dev sideload is plain http://<tailnet-ip>:5173,
+// where it is undefined in the Even app's WebView (measured on G2, 2026-10-17). Ids only need to be unique per app.
+const uid = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
 let talking: string | null = null // utterance id while push-to-talk is held
+let pcm = { chunks: 0, bytes: 0 } // mic diagnostics for the debug log (what actually reached the WebView)
 
 // ------------------------------------------------------------------ rendering
 
@@ -87,11 +91,16 @@ async function handle(msg: ServerMsg) {
     case 'page':
       return enqueue('page', async () => {
         const c = toSdk(msg)
-        if (!pageCreated) {
+        // Startup may only be attempted once: a retry is rejected (1) after blocking ~2 s, and a page left
+        // by an earlier load of this app (e.g. a dev-server reload) makes even the first call fail. Latch the
+        // attempt, not the success, and fall through to rebuild, which works whenever a page exists.
+        if (!startupTried) {
+          startupTried = true
           const r = await bridge.createStartUpPageContainer(new CreateStartUpPageContainer(c))
-          if (r !== StartUpPageCreateResult.success) throw new Error(`createStartUpPageContainer=${r}`)
-          pageCreated = true
-        } else if (!(await bridge.rebuildPageContainer(new RebuildPageContainer(c)))) throw new Error('rebuild failed')
+          if (r === StartUpPageCreateResult.success) return
+          log(`createStartUpPageContainer=${r}, using rebuild`)
+        }
+        if (!(await bridge.rebuildPageContainer(new RebuildPageContainer(c)))) throw new Error('rebuild failed')
       })
     case 'text':
       return enqueue(`t${msg.id}`, () => bridge.textContainerUpgrade(new TextContainerUpgrade({
@@ -102,7 +111,19 @@ async function handle(msg: ServerMsg) {
         containerID: msg.id, containerName: msg.name, imageData: b64ToBytes(msg.png_b64),
       })))
     case 'control':
-      if (msg.mic != null) await bridge.audioControl(msg.mic, AudioInputSource.Glasses)
+      // Server-driven utterance: on G2 hardware the long-press START never reaches apps (only the release
+      // does), so a controller can open and close the mic itself, e.g. swipe to ask, tap to send.
+      if (msg.mic === true && !talking) {
+        talking = uid()
+        send({ type: 'audio_start', utterance: talking })
+      }
+      if (msg.mic === true) pcm = { chunks: 0, bytes: 0 }
+      if (msg.mic != null) log(`mic ${msg.mic ? 'on' : 'off'}: ${await bridge.audioControl(msg.mic, AudioInputSource.Glasses)}`)
+      if (msg.mic === false) log(`mic got ${pcm.chunks} chunks, ${pcm.bytes} bytes`)
+      if (msg.mic === false && talking) {
+        send({ type: 'audio_end', utterance: talking })
+        talking = null
+      }
       if (msg.imu_pace != null) await bridge.imuControl(msg.imu_pace > 0, msg.imu_pace || undefined)
       if (msg.exit) await bridge.shutDownPageContainer(1)
       return
@@ -124,6 +145,8 @@ const SOURCE: Record<number, Input['source']> = {
 
 function onEvent(ev: EvenHubEvent) {
   if (ev.audioEvent) {
+    pcm.chunks++
+    pcm.bytes += ev.audioEvent.audioPcm?.byteLength ?? 0
     if (talking && ws?.readyState === WebSocket.OPEN) ws.send(ev.audioEvent.audioPcm)
     return
   }
@@ -152,7 +175,7 @@ function onEvent(ev: EvenHubEvent) {
   if (!kind) return
   // Long press is push-to-talk on every screen (contract, see DESIGN §6.2).
   if (kind === 'long_press' && !talking) {
-    talking = crypto.randomUUID()
+    talking = uid()
     send({ type: 'audio_start', utterance: talking })
     void bridge.audioControl(true, AudioInputSource.Glasses)
   } else if (kind === 'long_press_release' && talking) {
@@ -171,6 +194,22 @@ function onEvent(ev: EvenHubEvent) {
 
 // ---------------------------------------------------------------- transport
 
+// The server keys a lesson by device serial so reconnects resume it. Some hosts return no device info,
+// so fall back to an id kept in the Even app's storage for this phone.
+async function deviceInfo(): Promise<Record<string, unknown>> {
+  const info = await bridge.getDeviceInfo().catch(() => null)
+  const device: Record<string, unknown> = info ? JSON.parse(JSON.stringify(info)) : {}
+  if (!device.sn) {
+    let id = await bridge.getLocalStorage('bb_device_id').catch(() => '')
+    if (!id) {
+      id = `phone-${uid().slice(0, 8)}`
+      await bridge.setLocalStorage('bb_device_id', id).catch(() => false)
+    }
+    device.sn = id
+  }
+  return device
+}
+
 let backoff = 500
 function connect() {
   log(`connecting ${SERVER}`)
@@ -178,9 +217,9 @@ function connect() {
   ws.binaryType = 'arraybuffer'
   ws.onopen = async () => {
     backoff = 500
-    const info = await bridge.getDeviceInfo()
-    send({ type: 'hello', protocol: 1, client: 'g2', device: info ? JSON.parse(JSON.stringify(info)) : {} } satisfies Hello)
-    log('connected')
+    const device = await deviceInfo()
+    send({ type: 'hello', protocol: 1, client: 'g2', device } satisfies Hello)
+    log(`connected as ${device.sn}`)
   }
   ws.onmessage = (m) => void handle(JSON.parse(m.data as string) as ServerMsg).catch((e) => log(`handle: ${e}`))
   ws.onclose = () => {
