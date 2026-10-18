@@ -27,7 +27,7 @@ struct FrameReport: Sendable {
     var ar: ARDiag?  // world mode only
 }
 
-enum PoseSource: String, Sendable { case arkit, vision, world = "arkit-world" }
+enum PoseSource: String, Sendable { case arkit, vision, world = "arkit-world", worldFront = "arkit-world-front" }
 
 /// Everything that happens to a frame: face pose (Vision path), target tracking, JPEG + pose messages, preview.
 /// All frame entry points must be called on `queue`.

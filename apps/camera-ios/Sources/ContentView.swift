@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var glasses = GlassesModel()
     @State private var showSettings = false
     @State private var showTuning = false
+    @State private var demo = false  // demo mode: black screen (tracking keeps running), tap anywhere to come back
     @AppStorage("glassesExpanded") private var glassesExpanded = false
     @AppStorage("schematicOn") private var schematicOn = true
     @AppStorage("projectionOn") private var projectionOn = true
@@ -30,7 +31,13 @@ struct ContentView: View {
                 panel
             }
             .padding(.horizontal, 12)
+            if demo {
+                Color.black.ignoresSafeArea().contentShape(Rectangle()).onTapGesture { demo = false }
+                    .accessibilityLabel("Demo mode. Tap to exit")
+            }
         }
+        .statusBarHidden(demo)
+        .persistentSystemOverlays(demo ? .hidden : .automatic)
         .onAppear {
             if !serverOK { showSettings = true }
             glasses.detailed = glassesExpanded
@@ -59,7 +66,9 @@ struct ContentView: View {
         GeometryReader { geo in
             Color.clear.contentShape(Rectangle())
                 .gesture(SpatialTapGesture().onEnded { v in
-                    guard let n = Geo.viewToImageNorm(v.location, viewSize: geo.size, imageSize: model.overlay.report.imageSize)
+                    var loc = v.location
+                    if model.mirrored { loc.x = geo.size.width - loc.x }  // front preview is drawn mirrored; the image is not
+                    guard let n = Geo.viewToImageNorm(loc, viewSize: geo.size, imageSize: model.overlay.report.imageSize)
                     else { return }
                     model.tapPlace(n) { ok in
                         if ok { glasses.placeTapped() } else { glasses.notice = "No depth at that point." }
@@ -75,6 +84,14 @@ struct ContentView: View {
             Pill(label: "cam", state: model.camState)
             Pill(label: "pose", state: model.poseState)
             Spacer()
+            // ARKit swap, staying in World mode: rear image (LiDAR) <-> front image (TrueDepth). ARKit never gives both images
+            // at once; a swap restarts the session, so objects are found again on the other camera.
+            if model.mode == .world, model.frontWorldSupported {
+                Button { model.front.toggle() } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath.camera").font(.body.weight(.semibold)).frame(width: 40, height: 40)
+                        .background(.ultraThinMaterial, in: Circle())
+                }.tint(model.front ? .yellow : .white).accessibilityLabel(model.front ? "Swap to rear camera" : "Swap to front camera")
+            }
             if model.mode == .world {
                 Button { projectionOn.toggle() } label: {
                     Image(systemName: "scope").font(.body.weight(.semibold)).frame(width: 40, height: 40)
@@ -85,6 +102,10 @@ struct ContentView: View {
                         .background(.ultraThinMaterial, in: Circle())
                 }.tint(schematicOn ? .yellow : .white).accessibilityLabel("3D schematic")
             }
+            Button { demo = true } label: {
+                Image(systemName: "eye.slash").font(.body.weight(.semibold)).frame(width: 40, height: 40)
+                    .background(.ultraThinMaterial, in: Circle())
+            }.tint(.white).accessibilityLabel("Demo mode: black screen, tap to exit")
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape.fill").font(.body.weight(.semibold)).frame(width: 40, height: 40)
                     .background(.ultraThinMaterial, in: Circle())

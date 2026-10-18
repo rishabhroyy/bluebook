@@ -43,6 +43,8 @@ final class WorldEngine: @unchecked Sendable {
     private var removed = Set<UUID>()
     private var errors: [String: String] = [:]
     private var meshOn = false
+    private var raycastOK = true  // false in front-camera world mode (face configuration: no plane estimation)
+    private var frontDepth: (d: DepthSource, t: Double)?  // TrueDepth arrives on ~1 in 4 frames: keep the newest
     private let lock = NSLock()
     private var howMap: [String: String] = [:]  // mirror of id -> how for persistence (any thread)
     private var savedHow: [String: String] = [:]  // loaded sidecar, used when anchors come back from a world map
@@ -55,9 +57,9 @@ final class WorldEngine: @unchecked Sendable {
         tracker = ObjectTracker { [weak self] r in queue.async { self?.apply(r) } }
     }
 
-    func reset(meshOn: Bool, savedHow: [String: String]) {
-        known = [:]; removed = []; errors = [:]; lastFrame = nil; tracker.stopAll()
-        self.meshOn = meshOn; self.savedHow = savedHow
+    func reset(meshOn: Bool, savedHow: [String: String], raycast: Bool = true) {
+        known = [:]; removed = []; errors = [:]; lastFrame = nil; tracker.stopAll(); frontDepth = nil
+        self.meshOn = meshOn; self.savedHow = savedHow; raycastOK = raycast
         lock.withLock { howMap = savedHow }
     }
 
@@ -110,9 +112,10 @@ final class WorldEngine: @unchecked Sendable {
     func locate(id: String, box: CGRect, fraction: CGFloat = 0.5) -> Bool {
         guard let f = lastFrame else { fail(id); return false }
         let pts = Self.gridPoints(box: box, fraction: fraction)  // sensor-landscape normalised
-        var hits = depthHits(f, pts)
-        var how = "lidar"
-        if hits.count < 5 {
+        let d = depth(f)
+        var hits = depthHits(f, d, pts)
+        var how = d?.K == nil ? "lidar" : "truedepth"
+        if hits.count < 5, raycastOK {
             let r = raycastHits(f, pts)
             if r.points.count > hits.count { hits = r.points; how = r.how }
         }
@@ -128,7 +131,7 @@ final class WorldEngine: @unchecked Sendable {
     func couple(_ f: ARFrame) {
         guard !tracker.isEmpty else { return }
         let k = f.camera.intrinsics
-        tracker.submit(pb: f.capturedImage, depth: f.smoothedSceneDepth ?? f.sceneDepth,
+        tracker.submit(pb: f.capturedImage, depth: depth(f),
                        K: Intrinsics(fx: k[0][0], fy: k[1][1], cx: k[2][0], cy: k[2][1]), camT: f.camera.transform, t: f.timestamp)
     }
 
@@ -164,17 +167,25 @@ final class WorldEngine: @unchecked Sendable {
         return pts
     }
 
-    private func depthHits(_ f: ARFrame, _ pts: [CGPoint]) -> [SIMD3<Float>] {
+    /// The frame's depth: rear LiDAR, else the newest front TrueDepth map (<= 0.25 s old).
+    func depth(_ f: ARFrame) -> DepthSource? {
+        if let d = f.smoothedSceneDepth ?? f.sceneDepth { return DepthSource(map: d.depthMap, conf: d.confidenceMap, K: nil) }
+        if let a = f.capturedDepthData, let d = DepthSource(a) { frontDepth = (d, f.capturedDepthDataTimestamp) }
+        guard let fd = frontDepth, f.timestamp - fd.t < 0.25 else { return nil }
+        return fd.d
+    }
+
+    private func depthHits(_ f: ARFrame, _ d: DepthSource?, _ pts: [CGPoint]) -> [SIMD3<Float>] {
         let k = f.camera.intrinsics
-        return Self.depthHits(depth: f.smoothedSceneDepth ?? f.sceneDepth, K: Intrinsics(fx: k[0][0], fy: k[1][1], cx: k[2][0], cy: k[2][1]),
+        return Self.depthHits(depth: d, K: Intrinsics(fx: k[0][0], fy: k[1][1], cx: k[2][0], cy: k[2][1]),
                               imageW: Float(CVPixelBufferGetWidth(f.capturedImage)), imageH: Float(CVPixelBufferGetHeight(f.capturedImage)),
                               camT: f.camera.transform, pts: pts)
     }
 
-    /// Back-projected LiDAR hits (confidence >= medium, 0.1...8 m) at sensor-landscape normalised `pts`.
-    static func depthHits(depth: ARDepthData?, K: Intrinsics, imageW iw: Float, imageH ih: Float, camT: simd_float4x4, pts: [CGPoint]) -> [SIMD3<Float>] {
+    /// Back-projected depth hits (LiDAR confidence >= medium, 0.1...8 m) at sensor-landscape normalised `pts`.
+    static func depthHits(depth: DepthSource?, K: Intrinsics, imageW iw: Float, imageH ih: Float, camT: simd_float4x4, pts: [CGPoint]) -> [SIMD3<Float>] {
         guard let d = depth else { return [] }
-        let m = d.depthMap
+        let m = d.map
         CVPixelBufferLockBaseAddress(m, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(m, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(m), CVPixelBufferGetPixelFormatType(m) == kCVPixelFormatType_DepthFloat32 else { return [] }
@@ -182,7 +193,7 @@ final class WorldEngine: @unchecked Sendable {
         let stride = CVPixelBufferGetBytesPerRow(m) / MemoryLayout<Float32>.size
         let depth = base.assumingMemoryBound(to: Float32.self)
         var conf: UnsafePointer<UInt8>?, confStride = 0
-        let cm = d.confidenceMap
+        let cm = d.conf
         if let cm { CVPixelBufferLockBaseAddress(cm, .readOnly) }
         defer { if let cm { CVPixelBufferUnlockBaseAddress(cm, .readOnly) } }
         if let cm, let cb = CVPixelBufferGetBaseAddress(cm) {
@@ -190,7 +201,8 @@ final class WorldEngine: @unchecked Sendable {
         }
         var out: [SIMD3<Float>] = []
         for p in pts {
-            let x = min(max(Int(p.x * CGFloat(w)), 0), w - 1), y = min(max(Int(p.y * CGFloat(h)), 0), h - 1)
+            let (xf, yf) = d.pixel(p, K: K, imageW: iw, imageH: ih, w: w, h: h)
+            let x = min(max(Int(xf), 0), w - 1), y = min(max(Int(yf), 0), h - 1)
             let z = depth[y * stride + x]
             guard z.isFinite, z > 0.1, z < 8 else { continue }
             if let conf, conf[y * confStride + x] < UInt8(ARConfidenceLevel.medium.rawValue) { continue }
@@ -208,6 +220,33 @@ final class WorldEngine: @unchecked Sendable {
             switch r.target { case .existingPlaneGeometry, .existingPlaneInfinite: plane += 1; default: break }
         }
         return (out, plane * 2 > out.count ? "plane" : (meshOn ? "mesh" : "estimate"))
+    }
+}
+
+/// A depth map to place points with: rear LiDAR `sceneDepth` (pixel-aligned with the image) or the front TrueDepth
+/// `capturedDepthData` (own resolution/aspect, registered to the front colour camera: sampled through its intrinsics).
+struct DepthSource: @unchecked Sendable {
+    var map: CVPixelBuffer  // DepthFloat32, metres along the optical axis, sensor-landscape
+    var conf: CVPixelBuffer?  // LiDAR only
+    var K: Intrinsics?  // depth-map pixels; nil = aligned with the image, sample by normalised position
+
+    init(map: CVPixelBuffer, conf: CVPixelBuffer?, K: Intrinsics?) { self.map = map; self.conf = conf; self.K = K }
+
+    init?(_ a: AVDepthData) {
+        let d = a.depthDataType == kCVPixelFormatType_DepthFloat32 ? a : a.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
+        guard let cal = d.cameraCalibrationData, cal.intrinsicMatrixReferenceDimensions.width > 0 else { return nil }
+        let m = d.depthDataMap
+        let s = Float(CVPixelBufferGetWidth(m)) / Float(cal.intrinsicMatrixReferenceDimensions.width)
+        let k = cal.intrinsicMatrix
+        // ponytail: assumes the depth map is in the same sensor-landscape orientation as capturedImage (unverified on hw)
+        self.init(map: m, conf: nil, K: Intrinsics(fx: k[0][0] * s, fy: k[1][1] * s, cx: k[2][0] * s, cy: k[2][1] * s))
+    }
+
+    /// Depth-map pixel for a sensor-landscape normalised image point (image intrinsics K, image size iw x ih).
+    func pixel(_ p: CGPoint, K img: Intrinsics, imageW iw: Float, imageH ih: Float, w: Int, h: Int) -> (Float, Float) {
+        guard let k = K else { return (Float(p.x) * Float(w), Float(p.y) * Float(h)) }
+        let x = (Float(p.x) * iw - img.cx) / img.fx, y = (Float(p.y) * ih - img.cy) / img.fy  // ray, same camera centre
+        return (k.fx * x + k.cx, k.fy * y + k.cy)
     }
 }
 
