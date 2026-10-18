@@ -42,6 +42,8 @@ FAILED = "Couldn't answer. Hold to ask again."
 # G2 swipes sometimes arrive twice ~170 ms apart (measured 2026-10-17); without this one swipe skips two pages.
 SWIPE_DEBOUNCE_S = 0.3
 LOOKS_DONE = "★ looks done, tap"
+# Steps show text only (owner's call, 2026-10-17). True puts the step keyframe back in the image band.
+SHOW_KEYFRAMES = False
 
 # teach_page's image band (img_l + img_r): a step keyframe goes here unless Part 3 owns it.
 BAND = tuple(b for b in display.teach_page().boxes if isinstance(b, ImageBox))
@@ -436,7 +438,7 @@ class TeachController(Controller):
 
     async def _band(self, conn: GlassesConnection) -> None:
         """The step's first keyframe in the band, or black. Only sent when it changes (~100 ms per tile)."""
-        if self.interactive:
+        if self.interactive or not SHOW_KEYFRAMES:
             return
         pkg, step = self._pkg(conn), self._step(conn)
         path, tiles = None, None

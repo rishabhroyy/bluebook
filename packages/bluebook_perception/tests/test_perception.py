@@ -250,6 +250,22 @@ def test_boundary_f1_empty_predicted():
     assert result["f1"] == 0.0
 
 
+# ─────────────────────── step times vs video length ──────────────────────────
+
+
+def test_clamp_steps_keeps_times_inside_the_video():
+    from bluebook_perception.pipeline import _clamp_steps
+    from bluebook_perception.schemas import OutlineStep
+
+    steps = [
+        OutlineStep(title="a", t_start=0, t_end=60),
+        OutlineStep(title="b", t_start=60.5, t_end=140),
+        OutlineStep(title="c", t_start=141.5, t_end=157),
+    ]
+    out = _clamp_steps(steps, 127.5)
+    assert [(s.title, s.t_start, s.t_end) for s in out] == [("a", 0, 60), ("b", 60.5, 127.5)]
+
+
 # ─────────────────────── package validity ────────────────────────────────────
 
 

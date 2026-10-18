@@ -28,6 +28,17 @@ log = logging.getLogger("bluebook.perception.pipeline")
 PIPELINE_VERSION = "ingest-v1"
 
 
+def _clamp_steps(steps: list, duration: float) -> list:
+    """Keep outline step times inside the video. Gemini can return times past the end, and a clip
+    request past the end fails with 400 INVALID_ARGUMENT."""
+    out = [s.model_copy(update={"t_end": min(s.t_end, duration)}) for s in steps if s.t_start < duration]
+    if [(s.t_start, s.t_end) for s in out] != [(s.t_start, s.t_end) for s in steps]:
+        log.warning(
+            "outline: clamped step times to video duration %.1f s (%d -> %d steps)", duration, len(steps), len(out)
+        )
+    return out
+
+
 async def run(
     videos: list[Path],
     skill_id: str,
@@ -73,6 +84,7 @@ async def run(
     log.info("=== stage 3: outline ===")
     uploaded = await models.upload(Path(normalized_path))
     outline_result = await outline.run(uploaded, transcript_json, cache)
+    outline_result.steps = _clamp_steps(outline_result.steps, source_video.duration_s)
 
     # ── Build initial objects from outline ────────────────────────────────────
     objects: dict[str, ObjectRef] = {
@@ -95,6 +107,7 @@ async def run(
         [s.model_dump() for s in transcript_segs],
         objects_json,
         cache,
+        duration=source_video.duration_s,
     )
     detail_json = json.dumps([s.model_dump() for s in detail_steps], indent=2)
 
@@ -117,7 +130,8 @@ async def run(
             normalized_path,
             skill_id,
             step_id,
-            d_step.keyframe_times,
+            # caption clips run to int(t + 1) + 1, so keep t two seconds clear of the end
+            [min(t, source_video.duration_s - 2) for t in d_step.keyframe_times],
             target_objs,
             uploaded,
             cache,
