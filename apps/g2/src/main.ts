@@ -109,7 +109,7 @@ async function handle(msg: ServerMsg) {
       // Server-driven utterance: on G2 hardware the long-press START never reaches apps (only the release
       // does), so a controller can open and close the mic itself, e.g. swipe to ask, tap to send.
       if (msg.mic === true && !talking) {
-        talking = crypto.randomUUID()
+        talking = uid()
         send({ type: 'audio_start', utterance: talking })
       }
       if (msg.mic === true) pcm = { chunks: 0, bytes: 0 }
