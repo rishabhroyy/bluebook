@@ -1,6 +1,6 @@
 """`bluebook` developer CLI.
 
-    uv run bluebook bootstrap            # interactive: prereqs, .env, sample data, app deps
+    uv run bluebook bootstrap            # interactive: prereqs, .env, data dir, app deps
     uv run bluebook bootstrap --yes --api-key KEY   # non-interactive (agents / CI)
     uv run bluebook server               # same as bluebook-server
     uv run bluebook whisper              # download the Part 1 transcription model (~3 GB, once)
@@ -142,12 +142,7 @@ def bootstrap(a: argparse.Namespace) -> int:
     print("== data")
     skills = Path(values["BB_DATA_DIR"]) / "skills"
     skills.mkdir(parents=True, exist_ok=True)
-    if not any(skills.iterdir()):
-        for src in Path("fixtures/skills").iterdir():
-            shutil.copytree(src, skills / src.name)
-        print(f"  copied sample skill(s) into {skills}")
-    else:
-        print(f"  {skills} already has skills, left alone")
+    print(f"  skills live in {skills} (record one with Part 1, or copy a data/skills/<id>/ folder in)")
 
     print("== glasses app deps")
     if shutil.which("pnpm"):
@@ -162,7 +157,7 @@ def bootstrap(a: argparse.Namespace) -> int:
 def main() -> None:
     p = argparse.ArgumentParser(prog="bluebook")
     sub = p.add_subparsers(dest="cmd", required=True)
-    b = sub.add_parser("bootstrap", help="set up this laptop: prereqs, .env, sample data, app deps")
+    b = sub.add_parser("bootstrap", help="set up this laptop: prereqs, .env, data dir, app deps")
     b.add_argument("--yes", "-y", action="store_true", help="don't prompt; keep current/default values")
     b.add_argument("--api-key", help="Gemini API key (else prompted, hidden)")
     b.add_argument("--no-check", action="store_true", help="skip the network check of the API key")
