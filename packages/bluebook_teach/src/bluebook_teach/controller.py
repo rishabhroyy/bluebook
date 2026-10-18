@@ -66,8 +66,8 @@ def fresh_state() -> dict:
         "screen": "library",
         "skill_id": None,
         "step": 0,  # index into pkg.steps
-        "view": 0,  # index into the pages currently in "tip" (detail pages, or answer pages)
-        "answer": [],  # tutor pages shown in place of detail pages until dismissed
+        "view": 0,  # index into the pages currently in "tip" (the tooltip, or answer pages)
+        "answer": [],  # tutor pages shown in place of the tooltip until dismissed
         "library_ids": [],  # what the list showed, so list_select indices map to what the learner saw
         "extra_substeps": {},  # step_id -> session-local substeps added by the tutor
         "history": [],  # last 10 {q, a} turns
@@ -309,7 +309,7 @@ class TeachController(Controller):
         )
 
     async def _scroll(self, conn: GlassesConnection, d: int) -> None:
-        """Page through the answer (if one is showing), then back to the step's own pages."""
+        """Page through the answer (if one is showing); scrolling past either end dismisses it."""
         s = conn.state
         n = len(self._pages(conn))
         if 0 <= s["view"] + d < n:
@@ -417,8 +417,7 @@ class TeachController(Controller):
         s = conn.state
         if s["answer"]:
             return s["answer"]
-        step = self._step(conn)
-        return render.detail_pages(self._pkg(conn), step, s["extra_substeps"].get(step.id, []))
+        return render.paginate(self._step(conn).tooltip) or [""]  # no detail subpages: just the tooltip
 
     def _tip(self, conn: GlassesConnection) -> str:
         if self.note:  # listening / thinking / error replace the tooltip until the answer (or release)

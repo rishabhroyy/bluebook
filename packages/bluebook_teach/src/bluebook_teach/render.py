@@ -79,28 +79,6 @@ def paginate(text: str, limit: int = TIP_CHARS) -> list[str]:
     return pages
 
 
-def step_notes(pkg: SkillPackage, step: Step) -> list[str]:
-    """Package-level safety notes that name this step, most severe first."""
-    notes = sorted((n for n in pkg.safety if step.id in n.step_ids), key=lambda n: SEVERITY_ORDER[n.severity])
-    return [f"{n.severity.capitalize()}. {n.text}" for n in notes]
-
-
-def detail_pages(pkg: SkillPackage, step: Step, extra_substeps: list[str] = ()) -> list[str]:
-    """Scroll order on a step: tooltip, instruction, substeps, safety + warnings, tips, why."""
-    pages = paginate(step.tooltip) or [""]
-    pages += paginate(step.instruction)
-    subs = [*step.substeps, *extra_substeps]
-    for i, t in enumerate(subs, 1):
-        pages += paginate(f"Substep {i}/{len(subs)}. {t}")
-    for t in step_notes(pkg, step) + [f"Warning. {w}" for w in step.warnings]:
-        pages += paginate(t)
-    for t in step.tips:
-        pages += paginate(f"Tip. {t}")
-    if step.why:
-        pages += paginate(f"Why. {step.why}")
-    return pages
-
-
 def with_heard(heard: str, page: str) -> str:
     """'"which way is closed?"' on its own line above the answer page, cut to one line."""
     h = sanitize(heard)
@@ -127,7 +105,7 @@ def status_line(pkg: SkillPackage, i: int, view: int, n_pages: int, note: str = 
 
 def overview_text(pkg: SkillPackage) -> str:
     """Built most important first, then cut on a line boundary, so truncation never drops safety."""
-    lines = [pkg.title, "Tap to start. Double tap for the library.", "On a step, hold to ask, swipe for more."]
+    lines = [pkg.title, "Tap to start. Double tap for the library.", "On a step, hold to ask."]
     n = len(pkg.steps)
     lines.append(f"{n} steps, about {round(pkg.est_duration_s / 60)} min." if pkg.est_duration_s else f"{n} steps.")
     for note in sorted(pkg.safety, key=lambda s: SEVERITY_ORDER[s.severity]):
