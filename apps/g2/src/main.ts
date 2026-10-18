@@ -202,7 +202,7 @@ async function deviceInfo(): Promise<Record<string, unknown>> {
   if (!device.sn) {
     let id = await bridge.getLocalStorage('bb_device_id').catch(() => '')
     if (!id) {
-      id = `phone-${crypto.randomUUID().slice(0, 8)}`
+      id = `phone-${uid().slice(0, 8)}`
       await bridge.setLocalStorage('bb_device_id', id).catch(() => false)
     }
     device.sn = id
